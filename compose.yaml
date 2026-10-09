@@ -1,0 +1,12 @@
+services:
+  underwriter:
+    build: .
+    image: momo-underwriter:1.0.0
+    container_name: momo-underwriter
+    ports:
+      - "8000:8000"
+    environment:
+      MAX_UPLOAD_MB: "25"
+      ALLOWED_ORIGINS: "http://localhost:8000"
+      LOG_LEVEL: "INFO"
+    restart: unless-stopped

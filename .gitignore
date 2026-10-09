@@ -1,0 +1,17 @@
+# Dependencies and build output
+node_modules/
+frontend/dist/
+frontend/.smoke.cjs
+.venv/
+.venv-linux/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets and local data - never commit customer statements
+.env
+*.pdf
+logs/
+
+# A captured report from a real customer statement
+frontend/report.sample.json

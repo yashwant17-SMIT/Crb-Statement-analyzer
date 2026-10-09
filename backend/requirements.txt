@@ -1,0 +1,9 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pdfplumber==0.11.9
+pandas==2.3.3
+numpy==2.3.5
+# Google Sheets export (app/sheets.py). Inert unless GOOGLE_SHEETS_ID is set.
+google-auth==2.41.1
+requests==2.32.5
