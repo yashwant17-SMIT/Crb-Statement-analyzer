@@ -1,0 +1,729 @@
+{
+  "bureau": {
+    "source": "TransUnion Rwanda",
+    "subscriber": "SAMPLE LENDER LTD",
+    "report_date": "11 Aug 2026 10:14 AM",
+    "pdf_id": "sample-fixture",
+    "pages": 14
+  },
+  "applicant": {
+    "crn": "00000000000",
+    "names": "MS SAMPLE APPLICANT",
+    "national_id": "0000000000000000",
+    "date_of_birth": "01/Jan/1990",
+    "gender": "F",
+    "marital_status": "MARRIED",
+    "employment": "FARMER",
+    "address": null,
+    "phones": [
+      {
+        "number": "250788000000",
+        "last_update": "24-Apr-2023"
+      }
+    ],
+    "directorships": []
+  },
+  "gate": {
+    "statement_parsing_allowed": true,
+    "decision": "proceed",
+    "reason": "Band AA meets the minimum of DD.",
+    "band": "AA",
+    "score": 676,
+    "minimum_band": "DD",
+    "band_ladder": [
+      "AA",
+      "BB",
+      "CC",
+      "DD",
+      "EE",
+      "FF",
+      "GG",
+      "HH",
+      "II",
+      "JJ"
+    ],
+    "bands_accepted": [
+      "AA",
+      "BB",
+      "CC",
+      "DD"
+    ],
+    "band_score_ranges": [
+      {
+        "band": "AA",
+        "min_score": 668,
+        "max_score": 900,
+        "range": "668-900"
+      },
+      {
+        "band": "BB",
+        "min_score": 660,
+        "max_score": 667,
+        "range": "660-667"
+      },
+      {
+        "band": "CC",
+        "min_score": 654,
+        "max_score": 659,
+        "range": "654-659"
+      },
+      {
+        "band": "DD",
+        "min_score": 649,
+        "max_score": 653,
+        "range": "649-653"
+      },
+      {
+        "band": "EE",
+        "min_score": 642,
+        "max_score": 648,
+        "range": "642-648"
+      },
+      {
+        "band": "FF",
+        "min_score": 637,
+        "max_score": 641,
+        "range": "637-641"
+      },
+      {
+        "band": "GG",
+        "min_score": 630,
+        "max_score": 636,
+        "range": "630-636"
+      },
+      {
+        "band": "HH",
+        "min_score": 624,
+        "max_score": 629,
+        "range": "624-629"
+      },
+      {
+        "band": "II",
+        "min_score": 618,
+        "max_score": 623,
+        "range": "618-623"
+      },
+      {
+        "band": "JJ",
+        "min_score": 0,
+        "max_score": 617,
+        "range": "0-617"
+      }
+    ],
+    "probability_of_default": 1.14,
+    "recommendation": "refer",
+    "recommendation_reason": "The band opens the gate, but 5 blocking findings must be cleared by a credit officer before approval. Band measures ranking against the population, not capacity to take on more debt."
+  },
+  "score": {
+    "score": 676,
+    "band": "AA",
+    "probability_of_default": 1.14,
+    "adverse_action_reasons": []
+  },
+  "exposure": {
+    "open_account_count": 5,
+    "ongoing_loan_count": 3,
+    "closed_account_count": 6,
+    "portfolio": {
+      "performing": {
+        "open_count": 3,
+        "open_value": 793735,
+        "bureau_open_count": 3,
+        "bureau_open_value": 793735,
+        "by_sector": {
+          "your_sector": {
+            "open_count": 1.0,
+            "open_value": 480655.0
+          },
+          "other_sectors": {
+            "open_count": 2.0,
+            "open_value": 313080.0
+          }
+        }
+      },
+      "non_performing": {
+        "open_count": 2,
+        "open_value": 880984,
+        "bureau_open_count": 2,
+        "bureau_open_value": 880984,
+        "by_sector": {
+          "your_sector": {
+            "open_count": 1.0,
+            "open_value": 350680.0
+          },
+          "other_sectors": {
+            "open_count": 1.0,
+            "open_value": 530304.0
+          }
+        }
+      },
+      "reconciles": true,
+      "checks": [
+        {
+          "check": "open_performing_accounts",
+          "parsed": 3,
+          "bureau_summary": 3,
+          "matches": true
+        },
+        {
+          "check": "open_non_performing_accounts",
+          "parsed": 2,
+          "bureau_summary": 2,
+          "matches": true
+        },
+        {
+          "check": "open_performing_value",
+          "parsed": 793735,
+          "bureau_summary": 793735,
+          "matches": true
+        },
+        {
+          "check": "open_non_performing_value",
+          "parsed": 880984,
+          "bureau_summary": 880984,
+          "matches": true
+        },
+        {
+          "check": "closed_accounts",
+          "parsed": 6,
+          "bureau_summary": 6,
+          "matches": true
+        }
+      ],
+      "note": "Counts and values recovered from the account pages, checked against the figures the bureau states in its own SUMMARY block. A mismatch means the account sections were mis-read, not that the applicant changed."
+    },
+    "unserviced_obligations": {
+      "count": 2,
+      "balance": 880984,
+      "arrears": 954497,
+      "deducted_from_eligibility": false,
+      "note": "Non-performing facilities are excluded from the monthly EMI deduction because they are not being repaid on any schedule. Excluding them leaves MORE revenue available, so they are paired with a blocking finding - never read this as the facility being harmless.",
+      "accounts": [
+        {
+          "index": 1,
+          "classification": "LOSS",
+          "balance": 350680,
+          "arrears": 350680,
+          "last_payment": "27-Jun-2026"
+        },
+        {
+          "index": 2,
+          "classification": "DOUBTFUL",
+          "balance": 530304,
+          "arrears": 603817,
+          "last_payment": "30-Jun-2025"
+        }
+      ]
+    },
+    "total_open_balance": 1674719,
+    "total_arrears": 954497,
+    "arrears_share_of_balance": 0.5699,
+    "worst_days_in_arrears": 0,
+    "worst_days_in_arrears_reported": true,
+    "days_in_arrears_missing_count": 2,
+    "scheduled_monthly_payments": 71067,
+    "scheduled_monthly_payments_status": "partial",
+    "emi_scope": "open_performing_accounts_only",
+    "ongoing_emi_account_count": 3,
+    "emi_accounts_with_reported_payment": 1,
+    "emi_accounts_with_calculated_payment": 1,
+    "emi_accounts_missing_payment": 1,
+    "emi_accounts_excluded_from_eligibility": 2,
+    "emi_missing_account_indices": [
+      5
+    ],
+    "emi_calculated_account_indices": [
+      3
+    ],
+    "emi_excluded_account_indices": [
+      1,
+      2
+    ],
+    "credit_cap": 3000000,
+    "cap_headroom": 1325281,
+    "cap_breached": false,
+    "accounts": [
+      {
+        "index": 2,
+        "trade_sector": "MicroFinance Sector",
+        "type": "Instalment account",
+        "classification": "DOUBTFUL",
+        "status": "CURRENT",
+        "principal": 752000,
+        "balance": 530304,
+        "arrears": 603817,
+        "days_in_arrears": 0,
+        "worst_arrear_days": 0,
+        "scheduled_payment": 62667,
+        "emi_contribution": 0,
+        "scheduled_payment_available": false,
+        "scheduled_payment_printed_zero": false,
+        "scheduled_payment_period_assumed_monthly": false,
+        "calculated_emi": 62667,
+        "calculated_emi_available": true,
+        "repayment_terms": "12 MONTHLY",
+        "repayment_term_months": 12.0,
+        "term_basis": "exact_months",
+        "term_unusable_reason": null,
+        "non_performing": true,
+        "counted_in_emi": false,
+        "emi_source": "calculated_principal_only",
+        "days_in_arrears_reported": false,
+        "listing_date": "06-Mar-2025",
+        "last_payment": "30-Jun-2025",
+        "ref": "0200-2845"
+      },
+      {
+        "index": 3,
+        "trade_sector": "Non Deposit Taking",
+        "type": "Instalment account",
+        "classification": "NORMAL RISK",
+        "status": "CURRENT",
+        "principal": 400000,
+        "balance": 480655,
+        "arrears": 0,
+        "days_in_arrears": 0,
+        "worst_arrear_days": 0,
+        "scheduled_payment": 67638,
+        "emi_contribution": 67638,
+        "scheduled_payment_available": false,
+        "scheduled_payment_printed_zero": true,
+        "scheduled_payment_period_assumed_monthly": false,
+        "calculated_emi": 67638,
+        "calculated_emi_available": true,
+        "repayment_terms": "180 DAILY",
+        "repayment_term_months": 5.9,
+        "term_basis": "converted_from_daily",
+        "term_unusable_reason": null,
+        "non_performing": false,
+        "counted_in_emi": true,
+        "emi_source": "calculated_principal_only",
+        "days_in_arrears_reported": true,
+        "listing_date": "06-Feb-2025",
+        "last_payment": null,
+        "ref": "FGC/283"
+      },
+      {
+        "index": 1,
+        "trade_sector": "Non Deposit Taking",
+        "type": "Instalment account",
+        "classification": "LOSS",
+        "status": "CURRENT",
+        "principal": 400000,
+        "balance": 350680,
+        "arrears": 350680,
+        "days_in_arrears": 0,
+        "worst_arrear_days": 0,
+        "scheduled_payment": 101456,
+        "emi_contribution": 0,
+        "scheduled_payment_available": false,
+        "scheduled_payment_printed_zero": false,
+        "scheduled_payment_period_assumed_monthly": false,
+        "calculated_emi": 101456,
+        "calculated_emi_available": true,
+        "repayment_terms": "120 DAILY",
+        "repayment_term_months": 3.9,
+        "term_basis": "converted_from_daily",
+        "term_unusable_reason": null,
+        "non_performing": true,
+        "counted_in_emi": false,
+        "emi_source": "calculated_principal_only",
+        "days_in_arrears_reported": false,
+        "listing_date": "10-Apr-2025",
+        "last_payment": "27-Jun-2026",
+        "ref": "LN-2025"
+      },
+      {
+        "index": 4,
+        "trade_sector": "MicroFinance Sector",
+        "type": "Instalment account",
+        "classification": "NORMAL RISK",
+        "status": "CURRENT",
+        "principal": 300000,
+        "balance": 300000,
+        "arrears": 0,
+        "days_in_arrears": 0,
+        "worst_arrear_days": 0,
+        "scheduled_payment": 3429,
+        "emi_contribution": 3429,
+        "scheduled_payment_available": true,
+        "scheduled_payment_printed_zero": false,
+        "scheduled_payment_period_assumed_monthly": true,
+        "calculated_emi": null,
+        "calculated_emi_available": false,
+        "repayment_terms": "3 WEEKLY",
+        "repayment_term_months": null,
+        "term_basis": null,
+        "term_unusable_reason": null,
+        "non_performing": false,
+        "counted_in_emi": true,
+        "emi_source": "reported",
+        "days_in_arrears_reported": true,
+        "listing_date": "24-Jul-2026",
+        "last_payment": null,
+        "ref": "LD2620"
+      },
+      {
+        "index": 5,
+        "trade_sector": "Bank Sector Bureau",
+        "type": "MOBILE LOAN",
+        "classification": "NORMAL RISK",
+        "status": "CURRENT",
+        "principal": 12000,
+        "balance": 13080,
+        "arrears": 0,
+        "days_in_arrears": 0,
+        "worst_arrear_days": 0,
+        "scheduled_payment": null,
+        "emi_contribution": 0,
+        "scheduled_payment_available": false,
+        "scheduled_payment_printed_zero": true,
+        "scheduled_payment_period_assumed_monthly": false,
+        "calculated_emi": null,
+        "calculated_emi_available": false,
+        "repayment_terms": "",
+        "repayment_term_months": null,
+        "term_basis": null,
+        "term_unusable_reason": null,
+        "non_performing": false,
+        "counted_in_emi": true,
+        "emi_source": "unavailable",
+        "days_in_arrears_reported": true,
+        "listing_date": "02-Aug-2026",
+        "last_payment": null,
+        "ref": "2054-1907"
+      }
+    ]
+  },
+  "summary": {
+    "open_pa": {
+      "your_sector": 1.0,
+      "other_sectors": 2.0
+    },
+    "open_npa": {
+      "your_sector": 1.0,
+      "other_sectors": 1.0
+    },
+    "pa_open_total_value": {
+      "your_sector": 480655.0,
+      "other_sectors": 313080.0
+    },
+    "npa_open_total_value": {
+      "your_sector": 350680.0,
+      "other_sectors": 530304.0
+    },
+    "closed_pa": {
+      "your_sector": 0.0,
+      "other_sectors": 6.0
+    },
+    "closed_npa": {
+      "your_sector": 0.0,
+      "other_sectors": 0.0
+    },
+    "non-performing_accounts": {
+      "your_sector": 1.0,
+      "other_sectors": 1.0
+    },
+    "performing_accounts": {
+      "your_sector": 1.0,
+      "other_sectors": 8.0
+    },
+    "bounced_cheques": {
+      "your_sector": 0.0,
+      "other_sectors": 1.0
+    },
+    "fraudulent_cases": {
+      "your_sector": 0.0,
+      "other_sectors": 0.0
+    },
+    "enquiries_-_last_30_days": {
+      "your_sector": 0.0,
+      "other_sectors": 0.0
+    },
+    "enquiries_-_last_31_-_60_days": {
+      "your_sector": 2.0,
+      "other_sectors": 0.0
+    }
+  },
+  "repayment_track_record": {
+    "closed_accounts": 6,
+    "closed_small_facilities": 6,
+    "total_small_advanced": 90000,
+    "all_repaid_without_arrears": true,
+    "principal_escalation": [
+      {
+        "period": "2025-Q1",
+        "count": 6,
+        "average_principal": 15000
+      }
+    ],
+    "note": "Small-facility discipline and large-facility discipline are different signals. A clean run of micro-loans does not evidence capacity to service a multi-million instalment loan."
+  },
+  "enquiries": {
+    "total_listed": 2,
+    "by_reason": {
+      "Loan Application": 2
+    },
+    "by_year": {
+      "2025": 1,
+      "2026": 1
+    },
+    "items": [
+      {
+        "index": "1",
+        "trade_sector": "MicroFinance Sector",
+        "date": "26 May 2025",
+        "reason": "Loan Application"
+      },
+      {
+        "index": "2",
+        "trade_sector": "Non Deposit Taking",
+        "date": "09 Jun 2026",
+        "reason": "Loan Application"
+      }
+    ]
+  },
+  "collateral": {
+    "distinct_entries": 1,
+    "duplicates_removed": 30,
+    "items": [
+      {
+        "trade_sector": "MicroFinance Sector Bureau",
+        "collateral_type": "Secured - Details Unknown",
+        "valuation_amount": 2640000.0,
+        "valuation_date": "13-Feb-2025",
+        "sale_amount": 0.0
+      }
+    ],
+    "note": "30 identical duplicate entries were removed. Summing the raw list would overstate security 31-fold."
+  },
+  "insurance_policies": [],
+  "bounced_cheques": [
+    {
+      "trade_sector": "Bank Sector Bureau",
+      "cheque_date": "26-Jun-2025",
+      "cheque_no": "00000006",
+      "amount": 1250000.0,
+      "date_bounced": "08-Aug-2025",
+      "reason": "NSF(No Sufficient Funds)"
+    }
+  ],
+  "findings": [
+    {
+      "code": "NPA",
+      "title": "Non-performing account on file",
+      "severity": "blocking",
+      "detail": "A non-performing account is a hard decline under most credit policies.",
+      "evidence": {}
+    },
+    {
+      "code": "BOUNCED_CHEQUE",
+      "title": "Bounced cheques on file",
+      "severity": "blocking",
+      "detail": "1 cheque(s) returned unpaid, largest 1,250,000 RWF. A dishonoured cheque is a failure to fund a payment the applicant had already committed to.",
+      "evidence": {
+        "stated_in_summary": 1,
+        "detail_records_parsed": 1,
+        "cheques": [
+          {
+            "date_bounced": "08-Aug-2025",
+            "amount": 1250000,
+            "reason": "NSF(No Sufficient Funds)",
+            "trade_sector": "Bank Sector Bureau",
+            "cheque_no": "00000006"
+          }
+        ]
+      }
+    },
+    {
+      "code": "UNSERVICED_OBLIGATION",
+      "title": "Open debt with no active repayment schedule",
+      "severity": "blocking",
+      "detail": "2 non-performing facility(ies) hold 880,984 RWF outstanding with 954,497 RWF in arrears. No monthly EMI is deducted for them because none is being paid. This raises apparent affordability, so it must be cleared by a credit officer rather than read as capacity.",
+      "evidence": {
+        "accounts": [
+          {
+            "index": 1,
+            "classification": "LOSS",
+            "balance": 350680,
+            "arrears": 350680,
+            "last_payment": "27-Jun-2026"
+          },
+          {
+            "index": 2,
+            "classification": "DOUBTFUL",
+            "balance": 530304,
+            "arrears": 603817,
+            "last_payment": "30-Jun-2025"
+          }
+        ]
+      }
+    },
+    {
+      "code": "ARREARS",
+      "title": "Accounts in arrears",
+      "severity": "blocking",
+      "detail": "954,497 RWF is in arrears, 57% of the open balance. Arrears are money already owed and unpaid, not future capacity.",
+      "evidence": {
+        "accounts": [
+          {
+            "index": 2,
+            "trade_sector": "MicroFinance Sector",
+            "type": "Instalment account",
+            "classification": "DOUBTFUL",
+            "status": "CURRENT",
+            "principal": 752000,
+            "balance": 530304,
+            "arrears": 603817,
+            "days_in_arrears": 0,
+            "worst_arrear_days": 0,
+            "scheduled_payment": 62667,
+            "emi_contribution": 0,
+            "scheduled_payment_available": false,
+            "scheduled_payment_printed_zero": false,
+            "scheduled_payment_period_assumed_monthly": false,
+            "calculated_emi": 62667,
+            "calculated_emi_available": true,
+            "repayment_terms": "12 MONTHLY",
+            "repayment_term_months": 12.0,
+            "term_basis": "exact_months",
+            "term_unusable_reason": null,
+            "non_performing": true,
+            "counted_in_emi": false,
+            "emi_source": "calculated_principal_only",
+            "days_in_arrears_reported": false,
+            "listing_date": "06-Mar-2025",
+            "last_payment": "30-Jun-2025",
+            "ref": "0200-2845"
+          },
+          {
+            "index": 1,
+            "trade_sector": "Non Deposit Taking",
+            "type": "Instalment account",
+            "classification": "LOSS",
+            "status": "CURRENT",
+            "principal": 400000,
+            "balance": 350680,
+            "arrears": 350680,
+            "days_in_arrears": 0,
+            "worst_arrear_days": 0,
+            "scheduled_payment": 101456,
+            "emi_contribution": 0,
+            "scheduled_payment_available": false,
+            "scheduled_payment_printed_zero": false,
+            "scheduled_payment_period_assumed_monthly": false,
+            "calculated_emi": 101456,
+            "calculated_emi_available": true,
+            "repayment_terms": "120 DAILY",
+            "repayment_term_months": 3.9,
+            "term_basis": "converted_from_daily",
+            "term_unusable_reason": null,
+            "non_performing": true,
+            "counted_in_emi": false,
+            "emi_source": "calculated_principal_only",
+            "days_in_arrears_reported": false,
+            "listing_date": "10-Apr-2025",
+            "last_payment": "27-Jun-2026",
+            "ref": "LN-2025"
+          }
+        ]
+      }
+    },
+    {
+      "code": "SCORE_DIVERGENCE",
+      "title": "Band does not reflect the account detail",
+      "severity": "blocking",
+      "detail": "Band AA with a stated 1.14% default probability sits alongside real arrears and cap breach. The band is a population ranking, flattered here by a long tail of small closed facilities. Do not approve on the band alone.",
+      "evidence": {
+        "band": "AA",
+        "score": 676,
+        "probability_of_default": 1.14,
+        "adverse_action_reasons": []
+      }
+    },
+    {
+      "code": "EMI_PERIOD_ASSUMED",
+      "title": "Reported payment may not be monthly",
+      "severity": "warning",
+      "detail": "1 account(s) report a scheduled payment against a non-monthly repayment schedule. The bureau does not state the period of the Scheduled Payments figure; it is taken as monthly, which understates the obligation if it is per-instalment.",
+      "evidence": {
+        "accounts": [
+          {
+            "index": 4,
+            "repayment_terms": "3 WEEKLY",
+            "scheduled_payment": 3429
+          }
+        ]
+      }
+    },
+    {
+      "code": "EMI_DATA_INCOMPLETE",
+      "title": "Monthly EMI data is incomplete",
+      "severity": "warning",
+      "detail": "The bureau reports scheduled payments for 1 reported + 1 calculated of 3 ongoing repayment accounts. Only those known ongoing EMI amounts (71,067 RWF) are deducted from statement net revenue.",
+      "evidence": {
+        "reported_emi_accounts": 1,
+        "calculated_emi_accounts": 1,
+        "missing_emi_accounts": 1,
+        "reported_monthly_emi": 71067,
+        "missing_account_indices": [
+          5
+        ]
+      }
+    },
+    {
+      "code": "ADVERSE_CLASSIFICATION",
+      "title": "Adverse bureau classification",
+      "severity": "warning",
+      "detail": "One or more open accounts are classified worse than normal risk.",
+      "evidence": {
+        "accounts": [
+          {
+            "index": 1,
+            "classification": "LOSS",
+            "balance": 350680
+          },
+          {
+            "index": 2,
+            "classification": "DOUBTFUL",
+            "balance": 530304
+          }
+        ]
+      }
+    },
+    {
+      "code": "EMI_PLACEHOLDER_ZERO",
+      "title": "Scheduled payment printed as zero",
+      "severity": "informational",
+      "detail": "2 account(s) print a scheduled payment of 0.00 while carrying a live balance. A zero is treated as unreported rather than as an obligation of zero, and a principal-only estimate is used where a term is available.",
+      "evidence": {
+        "accounts": [
+          {
+            "index": 3,
+            "balance": 480655,
+            "emi_source": "calculated_principal_only"
+          },
+          {
+            "index": 5,
+            "balance": 13080,
+            "emi_source": "unavailable"
+          }
+        ]
+      }
+    }
+  ],
+  "notes": [
+    "The gate is band-only: AA, BB, CC, DD proceed to statement parsing, EE, FF, GG, HH, II, JJ do not.",
+    "Account Status of CURRENT is a billing state, not a health indicator. Days in arrears and classification are used instead.",
+    "Monthly EMI uses bureau Scheduled Payments where reported. When Scheduled Payments are missing but the bureau gives an explicit repayment term in months, a principal-only monthly estimate (principal divided by term) may be calculated and is labelled as an estimate. No interest rate, fees or other repayment costs are invented. Accounts with neither a reported payment nor a usable term remain unavailable and prevent a complete EMI assessment.",
+    "30 duplicate collateral entries removed; the raw list repeats one security once per facility.",
+    "Employment is recorded as 'FARMER'. Bureau employment fields are frequently placeholder text - do not treat as verified income.",
+    "The bureau phone list is not a KYC match. Confirm separately that the MoMo statement number belongs to this applicant before the two documents are treated as one customer."
+  ],
+  "meta": {
+    "filename": "sample-bureau-report.pdf",
+    "pages": 14,
+    "accounts_parsed": 11,
+    "elapsed_ms": 3900
+  }
+}

@@ -1,0 +1,30 @@
+# nginx reverse proxy with TLS in front of the systemd service.
+#
+#   sudo cp nginx.conf.example /etc/nginx/sites-available/momo-underwriter
+#   # edit server_name below
+#   sudo ln -s /etc/nginx/sites-available/momo-underwriter /etc/nginx/sites-enabled/
+#   sudo nginx -t && sudo systemctl reload nginx
+#   sudo certbot --nginx -d underwriting.example.com     # adds the TLS lines
+#
+# Install the service WITHOUT --lan so uvicorn listens on 127.0.0.1 only and
+# nginx is the sole way in. Set ACCESS_PASSWORD in /etc/momo-underwriter/env
+# and ALLOWED_ORIGINS=https://underwriting.example.com.
+
+server {
+    listen 80;
+    server_name underwriting.example.com;
+
+    # Must be at least MAX_UPLOAD_MB, or nginx rejects large statements with 413
+    # before the API sees them.
+    client_max_body_size 25m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # Large PDFs can take a while to parse.
+        proxy_read_timeout 120s;
+    }
+}
