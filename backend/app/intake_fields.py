@@ -10,7 +10,7 @@ sanction.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Optional
 
 _TYPES = {
     "new": "new", "new customer": "new", "first time": "new", "first-time": "new",
@@ -47,3 +47,22 @@ def requested_amount(value: Any) -> int:
     if amount != int(amount) or amount <= 0:
         raise IntakeFieldError(f"Requested amount {value!r} must be a positive whole number of RWF.")
     return int(amount)
+
+
+_PROVIDER_ALIASES = {"mtn": "mtn_momo", "momo": "mtn_momo", "bk": "bank_of_kigali"}
+
+
+def provider(value: Any) -> Optional[str]:
+    """A provider key, or None to let the parser detect it."""
+    from .statements import provider_options
+
+    key = re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+    if not key:
+        return None
+    for p in provider_options():
+        if key in (re.sub(r"[^a-z0-9]", "", p["value"]), re.sub(r"[^a-z0-9]", "", p["label"].casefold())):
+            return p["value"]
+    if key in _PROVIDER_ALIASES:
+        return _PROVIDER_ALIASES[key]
+    names = ", ".join(p["label"] for p in provider_options())
+    raise IntakeFieldError(f"Provider {value!r} is not recognised. Use one of: {names}, or leave it empty.")

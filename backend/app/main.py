@@ -6,6 +6,7 @@ MoMo Statement Underwriting API.
     POST /api/v1/transactions   multipart PDF  -> normalised transaction rows only
     GET  /api/v1/policy                        -> current default credit policy
     POST /api/v1/sheets/save    JSON           -> write an assessment to Google Sheets
+    POST /api/v1/intake/assess  multipart      -> one intake-sheet row, posted by Apps Script
     GET  /api/v1/health
 
 Stateless: nothing is written to disk, nothing is retained after the response.
@@ -25,10 +26,12 @@ from typing import List, Optional
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import UploadFile as FormFile
 
-from . import sheets
+from . import intake, intake_fields, sheets
 from .analyzer import analyze
 from .combine import account_label, combine_reports, group_by_account
 from .config import DEFAULT_POLICY, Policy
@@ -52,6 +55,9 @@ ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 ACCESS_PASSWORD = os.getenv("ACCESS_PASSWORD", "")
 ACCESS_USERNAME = os.getenv("ACCESS_USERNAME", "underwriter")
 OPEN_PATHS = {"/api/v1/health"}
+# Apps Script cannot answer a browser password prompt; this route checks its
+# own token instead (INTAKE_TOKEN), and is closed when that is unset.
+TOKEN_PATHS = {"/api/v1/intake/assess"}
 
 app = FastAPI(
     title="MoMo Statement Underwriting API",
@@ -78,7 +84,7 @@ async def require_password(request: Request, call_next):
     Browsers prompt natively and then re-send the header on same-origin fetch
     calls, so the React console needs no login screen of its own.
     """
-    if not ACCESS_PASSWORD or request.url.path in OPEN_PATHS:
+    if not ACCESS_PASSWORD or request.url.path in OPEN_PATHS | TOKEN_PATHS:
         return await call_next(request)
 
     header = request.headers.get("Authorization", "")
@@ -639,6 +645,66 @@ def sheets_save(payload: dict = Body(...)):
     except sheets.SheetsError as exc:
         log.warning("Sheets export failed: %s", exc)
         raise HTTPException(status_code=502, detail={"error": "sheets_failed", "message": str(exc)})
+
+
+@app.post("/api/v1/intake/assess")
+async def intake_assess(request: Request):
+    """One intake-sheet row, posted by the Apps Script bound to that sheet.
+
+    Multipart: `crb_file`, statements as `statement_file` (repeated) or
+    `statement_file_1`, `statement_file_2`, ... (Apps Script cannot repeat a
+    field), and the row's cells as typed: `customer_type`, `requested_amount`
+    and optionally `provider`. Cells are read strictly and a bad one is a 422
+    naming it. Requires the X-Intake-Token header.
+
+    The gate is the upload flow's: statements are only parsed if the bureau
+    clears. The response is what the script writes back to the sheet.
+    """
+    if not intake.configured():
+        raise HTTPException(status_code=503, detail={
+            "error": "intake_not_configured",
+            "message": "The intake route is off on this server. Set INTAKE_TOKEN to turn it on."})
+    if not intake.token_ok(request.headers.get("X-Intake-Token")):
+        raise HTTPException(status_code=401, detail={
+            "error": "unauthorised",
+            "message": "Missing or wrong X-Intake-Token. Check LEDGER_TOKEN in the script properties."})
+
+    form = await request.form(max_files=MAX_STATEMENT_FILES + 1, max_fields=20)
+    crb_file = form.get("crb_file")
+    if not isinstance(crb_file, FormFile):
+        raise HTTPException(status_code=422, detail={
+            "error": "intake_row_invalid", "message": "No bureau report was sent (crb_file)."})
+
+    def order(key: str) -> int:
+        tail = key.rpartition("_")[2]
+        return int(tail) if tail.isdigit() else 0
+
+    statement_files = [v for k, v in sorted(form.multi_items(), key=lambda kv: order(kv[0]))
+                       if (k == "statement_file" or k.startswith("statement_file_"))
+                       and isinstance(v, FormFile)]
+    try:
+        ctype = intake_fields.customer_type(form.get("customer_type"))
+        amount = intake_fields.requested_amount(form.get("requested_amount"))
+        prov = intake_fields.provider(form.get("provider"))
+    except intake_fields.IntakeFieldError as exc:
+        raise HTTPException(status_code=422, detail={"error": "intake_row_invalid", "message": str(exc)})
+
+    policy = Policy()
+    out, bureau = assess_bureau(crb_file.filename, await _read_pdf(crb_file), policy)
+    if out["credit_bureau"]["gate"]["statement_parsing_allowed"]:
+        out = assess_statements(out, bureau, await _read_statements(statement_files), [prov or ""],
+                                policy, customer_type=ctype, requested_amount=amount)
+
+    files = {"crb": crb_file.filename,
+             "statement": ", ".join(f.filename for f in statement_files)}
+    saved = None
+    if sheets.configured():
+        try:
+            saved = await run_in_threadpool(sheets.save, out["credit_bureau"], out.get("statement"), files)
+        except sheets.SheetsError as exc:
+            log.warning("Sheets export failed for an intake row: %s", exc)
+            saved = {"error": str(exc)}
+    return {**intake.for_sheet(out, files), "saved": saved}
 
 
 @app.get("/api/v1/providers")

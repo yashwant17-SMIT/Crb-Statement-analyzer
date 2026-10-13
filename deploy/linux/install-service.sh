@@ -86,6 +86,10 @@ ALLOWED_ORIGINS=http://localhost:$PORT
 # the service account's client_email as an Editor. See deploy/linux/README.md.
 #GOOGLE_SHEETS_ID=the-id-between-/d/-and-/edit-in-the-sheet-url
 #GOOGLE_SERVICE_ACCOUNT_FILE=$ENV_DIR/google-service-account.json
+
+# Intake sheet via Apps Script: the script bound to the intake sheet posts
+# each row here with this token. Off while unset. See apps-script/README.md.
+#INTAKE_TOKEN=output-of-openssl-rand-hex-32
 EOF
     echo "Wrote $ENV_FILE"
 else

@@ -134,6 +134,14 @@ warning-only protection so a stray edit prompts before it lands.
 The key grants write access to anything shared with that account, so keep it
 out of the project folder and out of version control.
 
+### 7. Intake sheet (optional)
+
+Applications can be queued in a Google Sheet, one row per application with
+Drive links to the PDFs, and assessed from a **Ledger** menu in that sheet.
+The script runs as the sheet owner, so the server needs no Google
+credentials for this. It does need a fixed public HTTPS address. Setup is in
+[apps-script/README.md](../../apps-script/README.md).
+
 ### Updating
 
 ```bash

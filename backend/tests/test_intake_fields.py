@@ -1,7 +1,7 @@
 """Intake sheet cell parsing: typed by people, refused rather than guessed."""
 import pytest
 
-from app.intake_fields import IntakeFieldError, customer_type, requested_amount
+from app.intake_fields import IntakeFieldError, customer_type, provider, requested_amount
 
 
 @pytest.mark.parametrize("cell,expected", [
@@ -30,3 +30,16 @@ def test_requested_amount_reads_numbers_and_formatted_text(cell, expected):
 def test_requested_amount_refuses_what_it_cannot_read_for_certain(cell):
     with pytest.raises(IntakeFieldError):
         requested_amount(cell)
+
+
+@pytest.mark.parametrize("cell,expected", [
+    ("", None), (None, None), ("MTN MoMo", "mtn_momo"), ("mtn_momo", "mtn_momo"),
+    ("MTN", "mtn_momo"), ("Bank of Kigali", "bank_of_kigali"), ("BK", "bank_of_kigali"),
+])
+def test_provider_reads_labels_keys_and_short_names(cell, expected):
+    assert provider(cell) == expected
+
+
+def test_provider_refuses_an_unknown_bank():
+    with pytest.raises(IntakeFieldError, match="Bank of Kigali"):
+        provider("Equity")
