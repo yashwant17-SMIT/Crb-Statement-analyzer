@@ -167,8 +167,17 @@ async def _read_pdf(file: UploadFile) -> bytes:
                         "message": f"Maximum upload size is {MAX_UPLOAD_MB} MB."},
             )
         chunks.append(chunk)
-    data = b"".join(chunks)
+    return _check_pdf(b"".join(chunks))
 
+
+def _check_pdf(data: bytes) -> bytes:
+    """The checks every PDF passes, whether uploaded or fetched from Drive."""
+    if len(data) > MAX_UPLOAD_MB * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail={"error": "file_too_large",
+                    "message": f"Maximum upload size is {MAX_UPLOAD_MB} MB."},
+        )
     if not data:
         raise HTTPException(status_code=400,
                             detail={"error": "empty_file", "message": "The uploaded file is empty."})
@@ -235,7 +244,7 @@ def _policy_from_form(
 MAX_STATEMENT_FILES = int(os.getenv("MAX_STATEMENT_FILES", "12"))
 
 
-def _providers_for(files: List[UploadFile], providers: List[str]) -> List[Optional[str]]:
+def _providers_for(files: list, providers: List[str]) -> List[Optional[str]]:
     """One provider per file. A single provider applies to every file."""
     providers = [p for p in (providers or []) if p] or [None]
     if len(providers) == 1:
@@ -248,28 +257,37 @@ def _providers_for(files: List[UploadFile], providers: List[str]) -> List[Option
     return providers
 
 
-async def _underwrite(files: List[UploadFile], providers: List[str], policy: Policy, *,
-                      monthly_emi=None, requested_amount=None, customer_type=None) -> dict:
+def _check_statement_count(n: int) -> None:
+    if n > MAX_STATEMENT_FILES:
+        raise HTTPException(status_code=400, detail={
+            "error": "too_many_files",
+            "message": f"At most {MAX_STATEMENT_FILES} statement files can be assessed together."})
+
+
+async def _read_statements(files: List[UploadFile]) -> list[tuple[str, bytes]]:
+    _check_statement_count(len(files))
+    return [(f.filename, await _read_pdf(f)) for f in files]
+
+
+def _underwrite(files: list[tuple[str, bytes]], providers: List[str], policy: Policy, *,
+                monthly_emi=None, requested_amount=None, customer_type=None) -> dict:
     """Parse and underwrite one or more statements into one report.
 
+    `files` is (filename, PDF bytes) pairs that have already passed _check_pdf.
     One account (however many files) returns exactly the single-statement
     report. Several accounts are analysed separately and combined; see
     app/combine.py.
     """
-    if len(files) > MAX_STATEMENT_FILES:
-        raise HTTPException(status_code=400, detail={
-            "error": "too_many_files",
-            "message": f"At most {MAX_STATEMENT_FILES} statement files can be assessed together."})
+    _check_statement_count(len(files))
     started = time.perf_counter()
     parsed = []
-    for f, prov in zip(files, _providers_for(files, providers)):
-        data = await _read_pdf(f)
+    for (name, data), prov in zip(files, _providers_for(files, providers)):
         try:
-            parsed.append((f.filename, parse_statement(data, provider=prov)))
+            parsed.append((name, parse_statement(data, provider=prov)))
         except StatementParseError as exc:
             if len(files) == 1:
                 raise
-            raise StatementParseError(f"{f.filename}: {exc}") from exc
+            raise StatementParseError(f"{name}: {exc}") from exc
 
     groups = group_by_account(parsed)
     for g in groups:
@@ -298,8 +316,8 @@ async def _underwrite(files: List[UploadFile], providers: List[str], policy: Pol
                                  requested_amount=requested_amount, customer_type=customer_type)
         metas = [g["meta"] for g in groups]
         report["meta"] = {
-            "filename": ", ".join(f.filename for f in files),
-            "files": [f.filename for f in files],
+            "filename": ", ".join(name for name, _ in files),
+            "files": [name for name, _ in files],
             "provider": report["account"]["provider"],
             "source_format": "combined",
             "pages": sum(m["pages"] for m in metas),
@@ -405,6 +423,7 @@ async def assess_application(
     credit_cap: Optional[int] = Form(None),
     min_band: Optional[str] = Form(None),
     customer_type: Optional[str] = Form(None),
+    requested_amount: Optional[int] = Form(None),
 ):
     """The enforced end-to-end flow.
 
@@ -413,13 +432,25 @@ async def assess_application(
     both files, because the statement is not touched until the band clears.
     """
     policy = _policy_from_form(large_txn_threshold, min_inflow_count, credit_cap, min_band)
+    out, bureau = assess_bureau(crb_file.filename, await _read_pdf(crb_file), policy)
+    if not out["credit_bureau"]["gate"]["statement_parsing_allowed"]:
+        return out
+    statements = await _read_statements(statement_file or [])
+    return assess_statements(out, bureau, statements, statement_provider or [], policy,
+                             customer_type=customer_type, requested_amount=requested_amount)
 
-    crb_bytes = await _read_pdf(crb_file)
+
+# The application in two steps, from PDF bytes. Shared by the upload endpoint
+# and the intake-sheet routes, so a row picked from a sheet is held to exactly
+# the same gate as a manual upload. Callers fetch the statements only after
+# assess_bureau says the gate is open.
+def assess_bureau(crb_name: str, crb_bytes: bytes, policy: Policy):
+    """Step 1. Returns the response so far and the parsed report for step 2."""
     started = time.perf_counter()
     report = parse_credit_report(crb_bytes)
     crb = assess_credit_report(report, policy)
     crb["meta"] = {
-        "filename": crb_file.filename,
+        "filename": crb_name,
         "pages": report.pages,
         "accounts_parsed": len(report.accounts),
         "elapsed_ms": round((time.perf_counter() - started) * 1000),
@@ -434,9 +465,16 @@ async def assess_application(
             "minimum_band": crb["gate"]["minimum_band"],
         }
         out["decision"] = crb["gate"]["decision"]
-        return out
+    return out, report
 
-    if not statement_file:
+
+def assess_statements(out: dict, report, statements: list[tuple[str, bytes]],
+                      providers: List[str], policy: Policy, *,
+                      customer_type: Optional[str] = None,
+                      requested_amount: Optional[int] = None) -> dict:
+    """Step 2, for an open gate: underwrite the statements against the bureau file."""
+    crb = out["credit_bureau"]
+    if not statements:
         out["statement_skipped"] = {
             "reason": "The gate is open but no statement was supplied. "
                       "Re-send with statement_file to complete the assessment.",
@@ -451,9 +489,11 @@ async def assess_application(
     crb_emi = crb_exposure.get("scheduled_monthly_payments")
     if crb_emi is None:
         crb_emi = 0
-    analysis = await _underwrite(statement_file, statement_provider or [], policy,
-                                 monthly_emi=crb_emi, customer_type=customer_type)
+    analysis = _underwrite(statements, providers, policy, monthly_emi=crb_emi,
+                           requested_amount=requested_amount, customer_type=customer_type)
     analysis.setdefault("summary", {}).setdefault("loan_eligibility", {})["crb_emi_status"] = crb_exposure.get("scheduled_monthly_payments_status")
+    analysis["meta"]["customer_type"] = customer_type or "new"
+    analysis["meta"]["requested_amount"] = requested_amount
     out["stage"] = "complete"
     out["statement"] = analysis
     out["decision"] = crb["gate"]["recommendation"]
@@ -647,8 +687,9 @@ async def analyze_statement(
     different person cannot be underwritten against someone else's bureau file.
     """
     policy = _policy_from_form(large_txn_threshold, min_inflow_count, credit_cap)
-    report = await _underwrite(file, provider or [], policy, monthly_emi=monthly_emi,
-                               requested_amount=requested_amount, customer_type=customer_type)
+    report = _underwrite(await _read_statements(file), provider or [], policy,
+                         monthly_emi=monthly_emi, requested_amount=requested_amount,
+                         customer_type=customer_type)
     report["meta"]["customer_type"] = customer_type or "new"
     report["meta"]["requested_amount"] = requested_amount
     if bureau_name or bureau_phones:

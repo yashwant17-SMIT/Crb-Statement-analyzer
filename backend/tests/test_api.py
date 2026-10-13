@@ -163,3 +163,24 @@ def test_identity_mismatch_becomes_a_blocking_edge_case_and_a_severe_flag():
         bureau_name="NIYOMUFASHA BENIE", bureau_phones=["0788437794"],
         statement_name="Benie NIYOMUFASHA", statement_msisdn="250788437794"))
     assert clean["edge_cases"] == [] and clean["red_flags"] == []
+
+
+def test_assess_does_not_open_the_statement_when_the_bureau_blocks(monkeypatch):
+    """The gate holds for the bytes path too: a blocked applicant's statement is
+    never read, so a broken statement file cannot turn a block into an error."""
+    import app.main as m
+
+    monkeypatch.setattr(m, "parse_credit_report",
+                        lambda data: type("R", (), {"pages": 2, "accounts": []})())
+    monkeypatch.setattr(m, "assess_credit_report", lambda report, policy: {
+        "gate": {"statement_parsing_allowed": False, "reason": "band", "band": "GG",
+                 "minimum_band": "DD", "decision": "decline"}})
+    monkeypatch.setattr(m, "parse_statement", lambda *a, **k: pytest.fail("statement was parsed"))
+    r = client.post(
+        "/api/v1/applications/assess",
+        files=[("crb_file", ("c.pdf", io.BytesIO(PDF), "application/pdf")),
+               ("statement_file", ("s.pdf", io.BytesIO(NOT_PDF), "application/pdf"))],
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["decision"] == "decline" and body["statement"] is None
