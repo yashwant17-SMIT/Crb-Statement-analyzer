@@ -26,7 +26,6 @@ from typing import List, Optional
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import UploadFile as FormFile
@@ -653,12 +652,15 @@ async def intake_assess(request: Request):
 
     Multipart: `crb_file`, statements as `statement_file` (repeated) or
     `statement_file_1`, `statement_file_2`, ... (Apps Script cannot repeat a
-    field), and the row's cells as typed: `customer_type`, `requested_amount`
-    and optionally `provider`. Cells are read strictly and a bad one is a 422
-    naming it. Requires the X-Intake-Token header.
+    field), the row's cells as typed: `customer_type`, `requested_amount`
+    and optionally `provider`, and `results_state`: JSON of the results
+    workbook's {"tabs": {title: sheetId}, "register": [[customer, current]]}.
+    Cells are read strictly and a bad one is a 422 naming it. Requires the
+    X-Intake-Token header.
 
     The gate is the upload flow's: statements are only parsed if the bureau
-    clears. The response is what the script writes back to the sheet.
+    clears. The response carries the batchUpdate the script applies to the
+    results workbook; see app/intake.py.
     """
     if not intake.configured():
         raise HTTPException(status_code=503, detail={
@@ -688,6 +690,10 @@ async def intake_assess(request: Request):
         prov = intake_fields.provider(form.get("provider"))
     except intake_fields.IntakeFieldError as exc:
         raise HTTPException(status_code=422, detail={"error": "intake_row_invalid", "message": str(exc)})
+    try:
+        tabs, register = intake.parse_state(form.get("results_state"))
+    except intake.StateError as exc:
+        raise HTTPException(status_code=400, detail={"error": "invalid_results_state", "message": str(exc)})
 
     policy = Policy()
     out, bureau = assess_bureau(crb_file.filename, await _read_pdf(crb_file), policy)
@@ -697,14 +703,7 @@ async def intake_assess(request: Request):
 
     files = {"crb": crb_file.filename,
              "statement": ", ".join(f.filename for f in statement_files)}
-    saved = None
-    if sheets.configured():
-        try:
-            saved = await run_in_threadpool(sheets.save, out["credit_bureau"], out.get("statement"), files)
-        except sheets.SheetsError as exc:
-            log.warning("Sheets export failed for an intake row: %s", exc)
-            saved = {"error": str(exc)}
-    return {**intake.for_sheet(out, files), "saved": saved}
+    return intake.for_sheet(out, files, tabs, register)
 
 
 @app.get("/api/v1/providers")

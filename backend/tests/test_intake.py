@@ -61,8 +61,12 @@ def _layout():
     return lay
 
 
+EMPTY_WORKBOOK = json.dumps({"tabs": {"Sheet1": 0}, "register": []})
+
+
 def post(token=TOKEN, statements=("jan.pdf", "feb.pdf"), **fields):
-    data = {"customer_type": "Existing", "requested_amount": "1,000,000", **fields}
+    data = {"customer_type": "Existing", "requested_amount": "1,000,000",
+            "results_state": EMPTY_WORKBOOK, **fields}
     files = [("crb_file", ("crb.pdf", io.BytesIO(PDF), "application/pdf"))]
     # The numbered form Apps Script sends, deliberately out of order.
     for i, name in reversed(list(enumerate(statements, 1))):
@@ -118,18 +122,31 @@ def test_a_bad_cell_is_named(engine, field, value, message):
     assert message in r.json()["detail"]["message"]
 
 
-def test_the_response_is_plain_values_the_script_can_write(engine):
+def test_the_response_is_the_results_workbook_write(engine):
     engine["gate"](True)
     body = post().json()
-    reg = body["register"]
-    assert len(reg["headers"]) == len(reg["values"][0])
-    assert "Underwriter decision" not in reg["headers"] and "Customer" not in reg["headers"]
-    rep = body["report"]
-    assert rep["title"].startswith(CRB["applicant"]["names"][:10])
-    assert len(rep["kinds"]) == len(rep["values"])
-    # Percentages and timestamps arrive as numbers with a format, not as text.
-    pd_row = next(i for i, row in enumerate(rep["values"]) if row and row[0] == "Probability of default")
-    assert rep["values"][pd_row][1] == pytest.approx(0.0114)
-    assert [pd_row, 1, "0.0%"] in rep["formats"]
-    assert ["Nothing", ""] in rep["values"]
-    assert body["saved"] is None
+    res = body["results"]
+    added = {op["addSheet"]["properties"]["title"] for op in res["ops"] if "addSheet" in op}
+    assert {"Register", "Monthly revenue", "Bureau accounts", "Findings", res["tab"]} == added
+    assert res["created"] is True and res["superseded"] == 0
+    assert any("appendCells" in op and op["appendCells"]["sheetId"] == sheets.TAB_IDS["Register"]
+               for op in res["ops"])
+
+
+def test_a_reassessed_customer_supersedes_their_register_row(engine):
+    engine["gate"](False)
+    title = sheets.tab_title(CRB, None)
+    state = json.dumps({"tabs": {**sheets.TAB_IDS, title: 4242},
+                        "register": [[title, "yes"], ["Someone else", "yes"]]})
+    res = post(results_state=state).json()["results"]
+    assert res["gid"] == 4242 and res["created"] is False and res["superseded"] == 1
+
+
+@pytest.mark.parametrize("state", [None, "", "not json", "{}", '{"tabs": {"A": "x"}}'])
+def test_a_missing_or_broken_workbook_state_is_refused(engine, state):
+    engine["gate"](True)
+    fields = {} if state is None else {"results_state": state}
+    data = {"customer_type": "New", "requested_amount": "500000", **fields}
+    r = CLIENT.post("/api/v1/intake/assess", data=data, headers={"X-Intake-Token": TOKEN},
+                    files=[("crb_file", ("crb.pdf", io.BytesIO(PDF), "application/pdf"))])
+    assert r.status_code == 400 and r.json()["detail"]["error"] == "invalid_results_state"

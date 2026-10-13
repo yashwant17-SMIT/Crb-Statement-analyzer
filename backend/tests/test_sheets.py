@@ -230,3 +230,27 @@ def test_unconfigured_server_refuses(monkeypatch):
     monkeypatch.setattr(sheets, "SHEET_ID", "")
     with pytest.raises(sheets.SheetsError, match="not configured"):
         sheets.save(CRB, REPORT)
+
+
+# ------------------------------------------------- plan: written by the caller
+def test_plan_builds_a_new_workbook_in_one_batch():
+    out = sheets.plan(CRB, REPORT, {}, tabs={"Sheet1": 0}, register=[])
+    added = [op["addSheet"]["properties"] for op in out["ops"] if "addSheet" in op]
+    assert {p["title"] for p in added} == {*sheets.TAB_IDS, out["tab"]}
+    assert out["created"] is True and out["superseded"] == 0
+    assert out["gid"] not in {0, *sheets.TAB_IDS.values()}
+    appended = {op["appendCells"]["sheetId"] for op in out["ops"] if "appendCells" in op}
+    assert appended == set(sheets.TAB_IDS.values())
+    json.dumps(out)  # goes over the wire as-is
+
+
+def test_plan_on_an_existing_workbook_matches_save():
+    title = "MS SAMPLE APPLICANT · 0000000000000000"
+    tabs = {"Sheet1": 0, **sheets.TAB_IDS, title.upper(): 77}
+    out = sheets.plan(CRB, None, {}, tabs=tabs,
+                      register=[("Someone else · 1", "yes"), (title, "yes"), (title, "no")])
+    assert out["created"] is False and out["gid"] == 77 and out["superseded"] == 1
+    assert not any("addSheet" in op for op in out["ops"])
+    marks = [op["updateCells"]["range"]["startRowIndex"] for op in out["ops"]
+             if "updateCells" in op and op["updateCells"]["range"]["sheetId"] == sheets.TAB_IDS["Register"]]
+    assert marks == [2]

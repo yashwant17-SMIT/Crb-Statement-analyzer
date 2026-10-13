@@ -8,15 +8,20 @@ Google credentials for this: what the script can open is what its owner can
 open in Drive.
 
 The route is closed unless INTAKE_TOKEN is set, and every call must carry it
-in the X-Intake-Token header. The response is shaped for the script, which
-writes it straight into the sheet: the row's status and one-line result, a
-Register row, and the customer's report as plain cell values.
+in the X-Intake-Token header.
+
+Output lands in the results workbook exactly as the Sheets export writes it
+(Register, detail tabs, the customer's formatted report), but the service
+does not write it. The script sends the workbook's current tabs and Register
+column, the service answers with the one batchUpdate that records the
+assessment (sheets.plan), and the script applies it as the sheet owner. The
+intake row then gets the status and a link to the customer's tab.
 """
 from __future__ import annotations
 
+import json
 import os
 import secrets
-from datetime import datetime
 from typing import Any, Optional
 
 from . import sheets
@@ -53,51 +58,25 @@ def outcome(out: dict) -> tuple[str, str]:
     return "Done", " · ".join(parts)
 
 
-def _plain(v: Any) -> tuple[Any, Optional[str]]:
-    """A cell value Apps Script can write as-is, and its number format."""
-    if isinstance(v, sheets.Pct):
-        return float(v), "0.0%"
-    if isinstance(v, sheets.Stamp):
-        return float(v), "yyyy-mm-dd hh:mm"
-    if v is None:
-        return "", None
-    return v, None
+class StateError(ValueError):
+    """The results-workbook state the script sent cannot be used."""
 
 
-def _table(rows: list[list[Any]]) -> dict:
-    """Rows of plain values, plus [row, col, format] for the cells that need one."""
-    values, formats = [], []
-    for r, row in enumerate(rows):
-        out = []
-        for c, v in enumerate(row):
-            plain, fmt = _plain(v)
-            out.append(plain)
-            if fmt:
-                formats.append([r, c, fmt])
-        values.append(out)
-    return {"values": values, "formats": formats}
+def parse_state(raw: Any) -> tuple[dict[str, int], list[tuple[str, str]]]:
+    """(tab title -> sheet ID, Register (Customer, Current) pairs) from the script."""
+    try:
+        state = json.loads(raw) if isinstance(raw, str) else None
+        tabs = {str(t): int(g) for t, g in state["tabs"].items()}
+        register = [(str(c or ""), str(x or "")) for c, x in state.get("register") or []]
+    except (TypeError, ValueError, KeyError, AttributeError) as exc:
+        raise StateError("results_state is missing or malformed. Update Code.gs to the "
+                         "version that ships with this server.") from exc
+    return tabs, register
 
 
-def for_sheet(out: dict, files: dict) -> dict:
-    """Everything the script writes back: status, Register row, report tab."""
-    crb, report = out.get("credit_bureau"), out.get("statement")
-    at = datetime.now().replace(microsecond=0)
-    aid = sheets.new_assessment_id(at)
-    title = sheets.tab_title(crb, report)
+def for_sheet(out: dict, files: dict, tabs: dict[str, int],
+              register: list[tuple[str, str]]) -> dict:
+    """The row's status and result, and the results-workbook write."""
     status, result = outcome(out)
-
-    # The Register as the export writes it, less the columns underwriters own
-    # and the customer link, which the script points at its own tab.
-    cols = [c for c in sheets.REGISTER_COLS if not c.human and c.header not in ("Customer", "Current")]
-    full = dict(zip((c.header for c in sheets.REGISTER_COLS),
-                    sheets.register_row(aid, at, title, 0, crb, report)))
-    register = _table([[full[c.header] for c in cols]])
-
-    lay = sheets.build_layout(crb, report, files, aid, at)
-    return {
-        "assessment_id": aid,
-        "status": status,
-        "result": result,
-        "register": {"headers": [c.header for c in cols], **register},
-        "report": {"title": title, "kinds": lay.kind, **_table(lay.rows)},
-    }
+    return {"status": status, "result": result,
+            "results": sheets.plan(out["credit_bureau"], out.get("statement"), files, tabs, register)}

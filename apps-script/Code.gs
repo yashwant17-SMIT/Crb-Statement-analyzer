@@ -3,21 +3,27 @@
  *
  * Bound to the intake sheet (Extensions → Apps Script). Runs as the person
  * who authorised it, so it can open exactly the Drive files they can. For
- * each row it downloads the bureau report and statements from Drive, posts
- * them to Ledger's /api/v1/intake/assess, and writes the outcome back:
+ * each row it downloads the bureau report and statements from Drive and
+ * posts them to Ledger's /api/v1/intake/assess. Ledger answers with the
+ * write that records the assessment in the results workbook, which this
+ * script applies:
  *
- *   this row          Ledger status, Ledger result, Ledger assessed at, Ledger report
- *   Ledger register   one row per assessment, never overwritten
- *   <customer> tab    the full report for the customer's latest assessment
+ *   results workbook   Register, Monthly revenue, Bureau accounts, Findings,
+ *                      and the customer's formatted report tab, exactly as
+ *                      Ledger's own Sheets export lays them out
+ *   this row           Ledger status, Ledger result, Ledger assessed at, and
+ *                      Ledger report: a link to the customer's tab
  *
  * Columns are found by header, in any order (see FIELDS). A row is pending
  * while its Ledger status is empty; clear it to run the row again.
  *
  * Script properties (Project Settings → Script properties):
- *   LEDGER_URL     https://ledger.example.com   (required)
- *   LEDGER_TOKEN   the server's INTAKE_TOKEN    (required)
- *   INTAKE_TAB     tab holding the applications (default: the first tab)
- *   REPORT_TABS    "no" to skip the per-customer report tabs
+ *   LEDGER_URL         https://ledger.example.com   (required)
+ *   LEDGER_TOKEN       the server's INTAKE_TOKEN    (required)
+ *   RESULTS_SHEET_ID   the results workbook (default: this spreadsheet)
+ *   INTAKE_TAB         tab holding the applications (default: the first tab)
+ *
+ * Needs the Google Sheets advanced service (appsscript.json enables it).
  */
 
 var LEDGER_COLS = ['Ledger status', 'Ledger result', 'Ledger assessed at', 'Ledger report'];
@@ -30,7 +36,6 @@ var FIELDS = {
                      'loanamount', 'loanamountrwf', 'amountrequested'],
   provider: ['provider', 'statementprovider'],
 };
-var REGISTER_TAB = 'Ledger register';
 var PROCESSING = 'Processing…';
 var MAX_BYTES = 25 * 1024 * 1024;        // the server's MAX_UPLOAD_MB
 var TIME_BUDGET_MS = 4.5 * 60 * 1000;    // Apps Script stops a run at 6 minutes
@@ -147,6 +152,7 @@ function assessRow_(ctx, n) {
       crb_file: pdf_(row.crb),
     };
     row.statements.forEach(function (link, i) { payload['statement_file_' + (i + 1)] = pdf_(link); });
+    payload.results_state = JSON.stringify(resultsState_(ctx.cfg));
 
     var res;
     try {
@@ -161,13 +167,13 @@ function assessRow_(ctx, n) {
     if (code !== 200) throw new Error(errorMessage_(code, res));
     var body = JSON.parse(res.getContentText());
 
-    var link = '';
-    if (ctx.cfg.reportTabs) {
-      link = '=HYPERLINK("#gid=' + writeReport_(body.report).getSheetId() + '","Open report")';
-    } else if (body.saved && body.saved.url) {
-      link = '=HYPERLINK("' + body.saved.url + '","Open report")';
+    try {
+      Sheets.Spreadsheets.batchUpdate({ requests: body.results.ops }, ctx.cfg.resultsId);
+    } catch (e) {
+      throw new Error('Assessed, but could not write to the results workbook: ' + e.message);
     }
-    appendRegister_(body, n, link);
+    var link = '=HYPERLINK("https://docs.google.com/spreadsheets/d/' + ctx.cfg.resultsId +
+      '/edit#gid=' + body.results.gid + '","Open report")';
     setStatus_(ctx, n, body.status, body.result, link);
     return true;
   } catch (e) {
@@ -205,7 +211,7 @@ function config_() {
   return {
     url: url, token: token,
     tab: String(p.getProperty('INTAKE_TAB') || '').trim(),
-    reportTabs: String(p.getProperty('REPORT_TABS') || 'yes').trim().toLowerCase() !== 'no',
+    resultsId: String(p.getProperty('RESULTS_SHEET_ID') || '').trim() || SpreadsheetApp.getActive().getId(),
   };
 }
 
@@ -333,60 +339,45 @@ function setStatus_(ctx, n, status, result, link) {
   });
 }
 
-function writeReport_(report) {
-  var ss = SpreadsheetApp.getActive();
-  var sheet = ss.getSheetByName(report.title) || ss.insertSheet(report.title);
-  sheet.clear();
-  var width = report.values.reduce(function (w, r) { return Math.max(w, r.length); }, 1);
-  var values = report.values.map(function (r) {
-    var row = r.slice();
-    while (row.length < width) row.push('');
-    return row;
-  });
-  sheet.getRange(1, 1, values.length, width).setValues(values);
-
-  var whole = [], byFormat = {};
-  values.forEach(function (r, i) {
-    r.forEach(function (v, j) {
-      if (typeof v === 'number' && v % 1 === 0 && Math.abs(v) >= 1000) whole.push(a1_(i, j));
-    });
-  });
-  report.formats.forEach(function (f) { (byFormat[f[2]] = byFormat[f[2]] || []).push(a1_(f[0], f[1])); });
-  if (whole.length) sheet.getRangeList(whole).setNumberFormat('#,##0');
-  Object.keys(byFormat).forEach(function (fmt) { sheet.getRangeList(byFormat[fmt]).setNumberFormat(fmt); });
-
-  report.kinds.forEach(function (kind, i) {
-    var row = sheet.getRange(i + 1, 1, 1, width);
-    if (kind === 'banner') row.setFontWeight('bold').setFontSize(14);
-    else if (kind === 'title') row.setFontWeight('bold').setFontSize(12);
-    else if (kind === 'head' || kind === 'total' || kind === 'sub') row.setFontWeight('bold');
-    else if (kind === 'meta' || kind === 'note') row.setFontStyle('italic').setFontColor('#5f6b78');
-  });
-  sheet.setColumnWidth(1, 280);
-  if (width > 1) sheet.setColumnWidths(2, width - 1, 140);
-  return sheet;
-}
-
-function appendRegister_(body, n, link) {
-  var ss = SpreadsheetApp.getActive();
-  var sheet = ss.getSheetByName(REGISTER_TAB);
-  var headers = ['Intake row', 'Report'].concat(body.register.headers);
-  if (!sheet) {
-    sheet = ss.insertSheet(REGISTER_TAB);
-    sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
-    sheet.setFrozenRows(1);
+/**
+ * What Ledger needs to plan the write: the results workbook's tabs, and the
+ * Register's Customer and Current columns so a re-assessed customer's earlier
+ * rows can be marked superseded. Read inside the run's lock, just before the
+ * write, so the two cannot drift apart.
+ */
+function resultsState_(cfg) {
+  var meta;
+  try {
+    meta = Sheets.Spreadsheets.get(cfg.resultsId, { fields: 'sheets.properties(sheetId,title)' });
+  } catch (e) {
+    throw new Error('Cannot open the results workbook (' + cfg.resultsId + '): ' + e.message +
+      ' Check RESULTS_SHEET_ID and that ' + Session.getEffectiveUser().getEmail() + ' can edit it.');
   }
-  sheet.appendRow([n, link].concat(body.register.values[0]));
-  var last = sheet.getLastRow();
-  body.register.formats.forEach(function (f) {
-    sheet.getRange(last, f[1] + 3).setNumberFormat(f[2]);
-  });
+  var tabs = {}, register = [];
+  (meta.sheets || []).forEach(function (s) { tabs[s.properties.title] = s.properties.sheetId; });
+  var title = Object.keys(tabs).filter(function (t) { return t.toLowerCase() === 'register'; })[0];
+  if (title) {
+    var q = "'" + title.replace(/'/g, "''") + "'!";
+    var header = (Sheets.Spreadsheets.Values.get(cfg.resultsId, q + '1:1').values || [[]])[0];
+    var c = header.indexOf('Customer'), x = header.indexOf('Current');
+    if (c >= 0 && x >= 0) {
+      var got = Sheets.Spreadsheets.Values.batchGet(cfg.resultsId, {
+        ranges: [q + col_(c) + '2:' + col_(c), q + col_(x) + '2:' + col_(x)],
+        valueRenderOption: 'FORMATTED_VALUE',
+      }).valueRanges;
+      var names = got[0].values || [], current = got[1].values || [];
+      for (var i = 0; i < Math.max(names.length, current.length); i++) {
+        register.push([(names[i] || [])[0] || '', (current[i] || [])[0] || '']);
+      }
+    }
+  }
+  return { tabs: tabs, register: register };
 }
 
-function a1_(i, j) {
+function col_(j) {
   var col = '', k = j + 1;
-  while (k) { var r = (k - 1) % 26; col = String.fromCharCode(65 + r) + col; k = Math.floor((k - 1) / 26); }
-  return col + (i + 1);
+  while (k) { col = String.fromCharCode(65 + (k - 1) % 26) + col; k = Math.floor((k - 1) / 26); }
+  return col;
 }
 
 function errorMessage_(code, res) {

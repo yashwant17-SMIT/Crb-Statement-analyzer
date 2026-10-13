@@ -1,6 +1,6 @@
 /**
- * Runs Code.gs against in-memory fakes of SpreadsheetApp, DriveApp and
- * UrlFetchApp. No Google account needed.
+ * Runs Code.gs against in-memory fakes of SpreadsheetApp, DriveApp,
+ * UrlFetchApp and the Sheets advanced service. No Google account needed.
  *
  *   node apps-script/test/run.mjs
  *
@@ -97,7 +97,39 @@ class Range {
   setFontColor() { return this }
 }
 
-function harness({ rows, files, respond, props = {} }) {
+const REGISTER_GID = 910001
+
+/** The results workbook, as far as Code.gs can see it through Sheets.*. */
+function workbook(fail) {
+  const wb = { tabs: { Sheet1: 0 }, register: [], batches: [], fail }
+  wb.api = {
+    get: () => ({ sheets: Object.entries(wb.tabs).map(([title, sheetId]) => ({ properties: { title, sheetId } })) }),
+    batchUpdate(body, id) {
+      if (wb.fail) throw new Error(wb.fail)
+      wb.batches.push({ id, ops: body.requests })
+      for (const op of body.requests) {
+        if (op.addSheet) wb.tabs[op.addSheet.properties.title] = op.addSheet.properties.sheetId
+        if (op.appendCells?.sheetId === REGISTER_GID) {
+          for (const row of op.appendCells.rows) {
+            const f = row.values.map((v) => v.userEnteredValue?.formulaValue).find(Boolean)
+            wb.register.push([/,"(.*)"\)$/.exec(f)[1], 'yes'])
+          }
+        }
+        const u = op.updateCells
+        if (u?.range.sheetId === REGISTER_GID && u.range.startRowIndex > 0) wb.register[u.range.startRowIndex - 1][1] = u.rows[0].values[0].userEnteredValue.stringValue
+      }
+      return {}
+    },
+    Values: {
+      get: () => ({ values: [['Assessment ID', 'Assessed at', 'Customer', 'Current']] }),
+      batchGet: () => ({ valueRanges: [{ values: wb.register.map((r) => [r[0]]) }, { values: wb.register.map((r) => [r[1]]) }] }),
+    },
+  }
+  return wb
+}
+
+function harness({ rows, files, respond, props = {}, failWrite }) {
+  const wb = workbook(failWrite)
   const intake = new Sheet('Applications', 1, rows)
   const sheets = [intake]
   const fetches = []
@@ -107,6 +139,7 @@ function harness({ rows, files, respond, props = {} }) {
     getSheetByName: (n) => sheets.find((s) => s.name === n) || null,
     insertSheet: (n) => { const s = new Sheet(n, 100 + sheets.length); sheets.push(s); return s },
     toast: (m) => toasts.push(m),
+    getId: () => 'intake-id',
   }
   const blob = (name, data) => ({ name, data, setName(n) { this.name = n; return this } })
   const ctx = {
@@ -134,6 +167,7 @@ function harness({ rows, files, respond, props = {} }) {
         return { getResponseCode: () => code, getContentText: () => (typeof body === 'string' ? body : JSON.stringify(body)) }
       },
     },
+    Sheets: { Spreadsheets: wb.api },
     LockService: { getDocumentLock: () => ({ tryLock: () => true, releaseLock() {} }) },
     Session: { getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' }) },
     ScriptApp: { getProjectTriggers: () => [] },
@@ -141,7 +175,7 @@ function harness({ rows, files, respond, props = {} }) {
   }
   vm.createContext(ctx)
   vm.runInContext(CODE, ctx)
-  return { ctx, intake, sheets, fetches, toasts, sheet: (n) => sheets.find((s) => s.name === n) }
+  return { ctx, intake, sheets, fetches, toasts, wb }
 }
 
 /** Posts the script's payload to a real server, the way UrlFetchApp would. */
@@ -158,7 +192,7 @@ function curl(url, opts) {
       args.push('-F', `${k}=${v}`)
     }
   }
-  const out = execFileSync('curl', args, { encoding: 'utf8' })
+  const out = execFileSync('curl', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   const at = out.lastIndexOf('\n')
   return { code: Number(out.slice(at + 1)), body: out.slice(0, at) }
 }
@@ -178,13 +212,8 @@ const row = (over = {}) => {
   return [r.amount, r.name, r.crb, r.notes, r.s1, r.s2, r.type]
 }
 const OK = {
-  status: 'Done', result: 'Band BB · Assessed — no findings', saved: null,
-  register: { headers: ['Assessment ID', 'Probability of default'], values: [['A1', 0.0114]], formats: [[0, 1, '0.0%']] },
-  report: {
-    title: 'BENIE N · 1199', kinds: ['banner', 'blank', 'title', 'pair', 'pair'],
-    values: [['Underwriting report — BENIE N'], [], ['Summary'], ['Requested amount (RWF)', 1000000], ['Probability of default', 0.0114]],
-    formats: [[4, 1, '0.0%']],
-  },
+  status: 'Done', result: 'Band BB · Assessed — no findings',
+  results: { ops: [{ addSheet: { properties: { sheetId: 5, title: 'BENIE N · 1199' } } }], gid: 5, tab: 'BENIE N · 1199' },
 }
 const col = (h, name) => h.intake.cells[0].findIndex((c) => c.value === name)
 const status = (h, n) => h.intake.cells[n - 1][col(h, 'Ledger status')].value
@@ -192,7 +221,7 @@ const result = (h, n) => h.intake.cells[n - 1][col(h, 'Ledger result')].value
 
 /* ------------------------------------------------------------------ tests */
 const tests = {
-  'pending rows are posted, marked and reported'() {
+  'pending rows are posted, written to the results workbook and linked'() {
     const h = harness({ rows: [HEADER, row(), [], row({ name: 'Second', type: 'new' })], files: FILES, respond: () => ({ code: 200, body: OK }) })
     h.ctx.assessPending()
     assert.equal(h.fetches.length, 2, 'the blank row is skipped')
@@ -204,20 +233,32 @@ const tests = {
     assert.equal(opts.payload.statement_file_2.name, 'feb.pdf', '=HYPERLINK formulas are read')
     assert.equal(opts.payload.customer_type, 'Existing')
     assert.equal(opts.payload.requested_amount, '1000000')
+    assert.deepEqual(JSON.parse(opts.payload.results_state), { tabs: { Sheet1: 0 }, register: [] })
+    // The second row sees the tab the first one created.
+    assert.equal(JSON.parse(h.fetches[1].opts.payload.results_state).tabs['BENIE N · 1199'], 5)
     // Ledger columns are added after the last header (G), once.
     assert.deepEqual(h.intake.cells[0].slice(7).map((c) => c.value), ['Ledger status', 'Ledger result', 'Ledger assessed at', 'Ledger report'])
     assert.equal(status(h, 2), 'Done')
     assert.equal(status(h, 4), 'Done')
-    assert.match(h.intake.cells[1][col(h, 'Ledger report')].formula, /^=HYPERLINK\("#gid=\d+","Open report"\)$/)
-    const rep = h.sheet('BENIE N · 1199')
-    assert.equal(rep.cells[4][1].format, '0.0%')
-    assert.equal(rep.cells[3][1].format, '#,##0')
-    assert.equal(rep.cells[0][0].bold, true)
-    const reg = h.sheet('Ledger register')
-    assert.equal(reg.cells.length, 3, 'header plus one row per assessment')
-    assert.equal(reg.cells[1][0].value, 2)
-    assert.equal(reg.cells[1][3].format, '0.0%')
+    assert.deepEqual(h.wb.batches.map((b) => b.id), ['intake-id', 'intake-id'], 'default: this spreadsheet')
+    assert.equal(h.intake.cells[1][col(h, 'Ledger report')].formula,
+      '=HYPERLINK("https://docs.google.com/spreadsheets/d/intake-id/edit#gid=5","Open report")')
+    assert.equal(h.sheets.length, 1, 'nothing is written into the intake spreadsheet by hand')
     assert.match(h.toasts.at(-1), /^2 assessed\.$/)
+  },
+
+  'RESULTS_SHEET_ID sends the output to another workbook'() {
+    const h = harness({ rows: [HEADER, row()], files: FILES, respond: () => ({ code: 200, body: OK }), props: { RESULTS_SHEET_ID: 'results-id' } })
+    h.ctx.assessPending()
+    assert.equal(h.wb.batches[0].id, 'results-id')
+    assert.match(h.intake.cells[1][col(h, 'Ledger report')].formula, /\/d\/results-id\/edit#gid=5/)
+  },
+
+  'a failed write to the results workbook marks the row'() {
+    const h = harness({ rows: [HEADER, row()], files: FILES, respond: () => ({ code: 200, body: OK }), failWrite: 'The caller does not have permission' })
+    h.ctx.assessPending()
+    assert.equal(status(h, 2), 'Error')
+    assert.match(result(h, 2), /could not write to the results workbook: The caller does not have permission/)
   },
 
   'assessed rows are not run again; a cleared status is'() {
@@ -281,13 +322,18 @@ const tests = {
 }
 
 const liveTests = {
-  'the real route parses what the script sends'() {
-    const h = harness({ rows: [HEADER, row(), row({ type: '' })], files: FILES })
+  'the real route plans the write and a re-run supersedes'() {
+    const h = harness({ rows: [HEADER, row(), row(), row({ type: '' })], files: FILES })
     h.ctx.assessPending()
     assert.equal(status(h, 2), 'Done', result(h, 2))
-    assert.ok(h.sheet('Ledger register'), 'register written')
-    assert.equal(status(h, 3), 'Error')
-    assert.match(result(h, 3), /Customer type is empty/)
+    assert.equal(status(h, 3), 'Done', result(h, 3))
+    for (const t of ['Register', 'Monthly revenue', 'Bureau accounts', 'Findings']) assert.ok(t in h.wb.tabs, t)
+    const customer = Object.keys(h.wb.tabs).find((t) => !['Sheet1', 'Register', 'Monthly revenue', 'Bureau accounts', 'Findings'].includes(t))
+    assert.ok(customer, 'customer tab created')
+    assert.deepEqual(h.wb.register, [[customer, 'no'], [customer, 'yes']], 'second assessment supersedes the first')
+    assert.ok(h.intake.cells[1][col(h, 'Ledger report')].formula.endsWith(`#gid=${h.wb.tabs[customer]}","Open report")`))
+    assert.equal(status(h, 4), 'Error')
+    assert.match(result(h, 4), /Customer type is empty/)
   },
 }
 
