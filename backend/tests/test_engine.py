@@ -949,7 +949,7 @@ def test_statement_one_day_short_of_90_days_blocks_revenue():
 
 def test_statement_generated_too_long_ago_blocks_revenue():
     from datetime import datetime, timedelta
-    stale = (datetime.now() - timedelta(days=11)).strftime("%Y-%m-%d")
+    stale = (datetime.now() - timedelta(days=Policy().statement_max_age_days + 1)).strftime("%Y-%m-%d")
     rows = [txn(1, "2026-01-05 09:00:00", "250788800001", "Real Customer", ACC, "Jane Jane", 9_000)]
     stmt = ParsedStatement(
         StatementHeader(customer="Jane DOE", msisdn=ACC, period_start="2026-01-01",

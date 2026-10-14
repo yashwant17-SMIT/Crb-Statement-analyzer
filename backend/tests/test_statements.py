@@ -310,6 +310,20 @@ def test_momo_app_unparseable_timestamp_is_rejected_not_dropped():
     assert "garbage" in st.rejected_rows[0].reason
 
 
+def test_momo_app_status_wrapped_mid_word_is_still_successful():
+    """A narrow Status column prints 'SUCCESS\\nFUL'; it must not read as failed."""
+    from app.statements import mtn_momo
+    wrapped = _momo_row("31058791364", "2026-10-06 20:51:59")
+    wrapped[1] = "SUCCESS\nFUL"
+    short = _momo_row("31058791365", "2026-10-06 20:52:00")
+    short[1] = "SUCCESS"
+    failed = _momo_row("31058791366", "2026-10-06 20:53:00")
+    failed[1] = "FAILED"
+    page = _FakePage([_MOMO_HEAD, wrapped, short, failed], _MOMO_TEXT)
+    st = mtn_momo.parse(_FakePdf(page))
+    assert [t.status for t in st.transactions] == ["SUCCESSFUL", "SUCCESSFUL", "FAILED"]
+
+
 # ------------------------------------------------ BK branch-printed layout --
 BK_BRANCH_PAGE1 = """4 August 2026
 14:11:22

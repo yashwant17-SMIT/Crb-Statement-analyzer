@@ -297,7 +297,7 @@ class Policy:
     # days, so there is no tolerance below the floor by default.
     statement_period_target_days: int = 90
     statement_period_tolerance_days: int = 0
-    statement_max_age_days: int = 10
+    statement_max_age_days: int = 15
 
     # --- Format handling ---------------------------------------------------
     # Refuse to state a revenue figure for an account the header identifies as
