@@ -8,6 +8,8 @@ Quirks handled below:
   * a transaction can wrap across two table rows, the continuation carrying
     the tail of the From/To names with an empty id;
   * the column header repeats on every page;
+  * the Status and Type cells can wrap mid-word ("SUCCESS\nFUL"), so line
+    breaks are removed before the value is normalised;
   * the Date column is narrow in some issues of the format, so the timestamp
     wraps inside its cell ("2026-\n10-01\n23:22:50"), and at a page break part
     of it can land on the continuation row ("2026-" then "10-01 23:22:50").
@@ -30,6 +32,7 @@ TXID_RE = re.compile(r"^\d{6,}$")
 # A timestamp with every line break and space removed: "2026-10-0123:22:50".
 _SQUASHED_TS = re.compile(r"(\d{4}-\d{2}-\d{2})(\d{2}:\d{2}(?::\d{2})?)")
 HEADER_FIRST_CELL = "transaction\nid"
+_OK_STATUSES = {"SUCCESSFUL", "SUCCESS", "COMPLETED", "COMMITTED"}
 
 _HEADER_FIELDS = {
     "customer": re.compile(r"Customer:\s*(.+)"),
@@ -136,10 +139,11 @@ def parse(pdf) -> ParsedStatement:
             f_name = dedupe_name(f"{f_name} {rec['from_tail']}".strip())
         if rec.get("to_tail"):
             t_name = dedupe_name(f"{t_name} {rec['to_tail']}".strip())
+        status = re.sub(r"\s+", "", raw[1] or "").upper()
         rows.append(Txn(
             txn_id=clean(raw[0]),
-            status=clean(raw[1]).upper(),
-            txn_type=clean(raw[2]).upper(),
+            status="SUCCESSFUL" if status in _OK_STATUSES else "FAILED",
+            txn_type=re.sub(r"\s+", "", raw[2] or "").upper(),
             timestamp=ts,
             from_msisdn=f_id, from_name=f_name,
             to_msisdn=t_id, to_name=t_name,
