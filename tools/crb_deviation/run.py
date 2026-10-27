@@ -77,9 +77,11 @@ def summary(df: pd.DataFrame, source: str, policy: Policy) -> pd.DataFrame:
              ("Minimum approved band", policy.min_band), ("Loans considered from", policy.crb_history_cutoff),
              ("D6 Allowed", f"<= {checks.D6_ALLOWED_MAX_DPD} days past due and arrears <= "
                             f"RWF {checks.D6_ALLOWED_MAX_ARREARS:,}"),
-             ("D6 Reject", f"> {checks.D6_REJECT_OVER_DPD} days past due and arrears > "
-                           f"RWF {checks.D6_REJECT_OVER_ARREARS:,}"),
-             ("Review", "Outside Allowed but not a stated Reject, or a date the rule needs is missing.")]
+             ("D6 Refer", f"{checks.D6_ALLOWED_MAX_DPD + 1}-{checks.D6_REFER_MAX_DPD} days past due and "
+                          f"arrears <= RWF {checks.D6_REFER_MAX_ARREARS:,}; anything beyond is Reject"),
+             ("D5", "Cleared before the cutoff is Allowed even when the maturity is unknown"),
+             ("Refer", "Goes to the credit head."),
+             ("Review", "The report lacks a date or figure the rule needs.")]
     return pd.DataFrame(rows, columns=["", "Customers"])
 
 
@@ -87,6 +89,7 @@ def write(df: pd.DataFrame, summ: pd.DataFrame, path: Path) -> None:
     sheets = {"Summary": summ,
               "Could be approved": df[df["Group"] == checks.COULD_APPROVE],
               "Would be rejected": df[df["Group"] == checks.WOULD_REJECT],
+              "Refer to credit head": df[df["Group"].isin([checks.REJECTED_REFER, checks.APPROVED_REFER])],
               "Needs a look": df[df["Group"].isin([checks.REJECTED_REVIEW, checks.APPROVED_REVIEW])],
               "All customers": df}
     with pd.ExcelWriter(path, engine="openpyxl") as xl:

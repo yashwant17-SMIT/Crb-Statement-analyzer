@@ -10,9 +10,9 @@ band, but would pass" and "approved on band, but would fail".
 Nothing here is used by the live tool. It only imports the bureau parser and a
 few helpers from backend/app so a report is read exactly as the tool reads it.
 
-Each check is Allowed, Review or Reject. Review means the point is outside
-Allowed but not a stated Reject (e.g. 30 days past due), or the report lacks a
-date the rule needs. A customer passes only when every check is Allowed.
+Each check is Allowed, Refer, Review or Reject. Refer goes to the credit
+head; anything beyond Refer is a Reject. Review means the report lacks a date
+or figure the rule needs. A customer passes only when every check is Allowed.
 """
 from __future__ import annotations
 
@@ -30,28 +30,30 @@ from app.crb_analyzer import (  # noqa: E402
 )
 from app.crb_parser import BAND_LADDER, CreditAccount, ParsedCreditReport  # noqa: E402
 
-ALLOWED, REVIEW, REJECT = "Allowed", "Review", "Reject"
-_RANK = {ALLOWED: 0, REVIEW: 1, REJECT: 2}
+ALLOWED, REFER, REVIEW, REJECT = "Allowed", "Refer", "Review", "Reject"
+_RANK = {ALLOWED: 0, REFER: 1, REVIEW: 2, REJECT: 3}
 
-# D6: performing / open accounts, per account.
-D6_ALLOWED_MAX_DPD = 15            # 0-15 days past due ...
+# D6: performing / open accounts, per account. Beyond Refer is Reject.
+D6_ALLOWED_MAX_DPD = 15            # Allowed: 0-15 days past due ...
 D6_ALLOWED_MAX_ARREARS = 150_000   # ... with arrears at most this (RWF)
-D6_REJECT_OVER_DPD = 90            # more than 90 days past due ...
-D6_REJECT_OVER_ARREARS = 50_000    # ... with arrears above this (RWF)
+D6_REFER_MAX_DPD = 90              # Refer: 16-90 days past due ...
+D6_REFER_MAX_ARREARS = 100_000     # ... with arrears at most this (RWF)
 
 WRITE_OFF = ("WRITTEN OFF", "WRITE OFF", "CHARGED OFF", "CHARGE OFF")
 AVG_MONTH_DAYS = 30.4375
 
 # Groups, in the order the summary lists them.
 COULD_APPROVE = "Rejected on band - could be approved"
+REJECTED_REFER = "Rejected on band - refer to credit head"
 REJECTED_REVIEW = "Rejected on band - needs a look"
 STAYS_REJECTED = "Rejected on band - stays rejected"
 WOULD_REJECT = "Approved on band - would be rejected"
+APPROVED_REFER = "Approved on band - refer to credit head"
 APPROVED_REVIEW = "Approved on band - needs a look"
 NO_CHANGE = "Approved on band - no change"
 NOT_ASSESSED = "Not assessed"
-GROUPS = [COULD_APPROVE, REJECTED_REVIEW, STAYS_REJECTED,
-          WOULD_REJECT, APPROVED_REVIEW, NO_CHANGE, NOT_ASSESSED]
+GROUPS = [COULD_APPROVE, REJECTED_REFER, REJECTED_REVIEW, STAYS_REJECTED,
+          WOULD_REJECT, APPROVED_REFER, APPROVED_REVIEW, NO_CHANGE, NOT_ASSESSED]
 
 
 @dataclass
@@ -122,7 +124,10 @@ def d5_closed_npa(report: ParsedCreditReport, cutoff: datetime) -> Check:
     """A closed NPA is allowed only when it both matured and was cleared before the cutoff.
 
     Maturity is listing date + repayment term. The report carries no clearance
-    date, so the last payment date stands in for it. A missing date is Review.
+    date, so the last payment date stands in for it. A loan cleared before the
+    cutoff is allowed even when its maturity cannot be worked out: a facility
+    fully repaid by then cannot realistically still be running past it. Only a
+    missing clearance date is Review.
     """
     closed = [a for a in report.accounts if not a.is_open and is_npa(a) and not is_write_off(a)]
     if not closed:
@@ -132,11 +137,13 @@ def d5_closed_npa(report: ParsedCreditReport, cutoff: datetime) -> Check:
         listed, cleared = _date(a.listing_date), _date(a.last_payment_date)
         term = a.repayment_term_months
         matured = listed + timedelta(days=term * AVG_MONTH_DAYS) if listed and term else None
-        when = (f"matures {matured:%b %Y}" if matured else "maturity unknown") + ", " + \
+        unknown = "maturity unknown" + (f" (terms {a.repayment_terms!r})" if a.repayment_terms
+                                        else " (no repayment terms)")
+        when = (f"matures {matured:%b %Y}" if matured else unknown) + ", " + \
                (f"cleared {cleared:%b %Y}" if cleared else "clearance unknown")
         if (matured and matured >= cutoff) or (cleared and cleared >= cutoff):
             results.append(REJECT)
-        elif matured and cleared:
+        elif cleared:
             results.append(ALLOWED)
         else:
             results.append(REVIEW)
@@ -151,14 +158,17 @@ def d6_open_accounts(report: ParsedCreditReport, cutoff: datetime) -> Check:
     results, flagged = [], []
     for a in accounts:
         dpd, arrears = a.days_in_arrears, a.arrears_amount
+        why = f"{dpd} days past due, arrears {_rwf(arrears)}"
         if not a.days_in_arrears_reported and arrears > 0:
-            r, why = REVIEW, f"arrears {_rwf(arrears)}, days past due not printed"
+            # Above both arrears limits it fails whatever the days; below, the days decide.
+            over = arrears > max(D6_ALLOWED_MAX_ARREARS, D6_REFER_MAX_ARREARS)
+            r, why = (REJECT if over else REVIEW), f"arrears {_rwf(arrears)}, days past due not printed"
         elif dpd <= D6_ALLOWED_MAX_DPD and arrears <= D6_ALLOWED_MAX_ARREARS:
-            r, why = ALLOWED, ""
-        elif dpd > D6_REJECT_OVER_DPD and arrears > D6_REJECT_OVER_ARREARS:
-            r, why = REJECT, f"{dpd} days past due, arrears {_rwf(arrears)}"
+            r = ALLOWED
+        elif D6_ALLOWED_MAX_DPD < dpd <= D6_REFER_MAX_DPD and arrears <= D6_REFER_MAX_ARREARS:
+            r = REFER
         else:
-            r, why = REVIEW, f"{dpd} days past due, arrears {_rwf(arrears)}"
+            r = REJECT
         results.append(r)
         if r != ALLOWED:
             flagged.append(f"{_name(a)} {why}: {r}")
@@ -199,9 +209,11 @@ def evaluate(report: ParsedCreditReport, policy: Optional[Policy] = None) -> Dic
         group, band_rule = NOT_ASSESSED, "No band"
     elif rejected:
         band_rule = "Rejected"
-        group = {ALLOWED: COULD_APPROVE, REVIEW: REJECTED_REVIEW, REJECT: STAYS_REJECTED}[overall]
+        group = {ALLOWED: COULD_APPROVE, REFER: REJECTED_REFER, REVIEW: REJECTED_REVIEW,
+                 REJECT: STAYS_REJECTED}[overall]
     else:
         band_rule = "Approved"
-        group = {ALLOWED: NO_CHANGE, REVIEW: APPROVED_REVIEW, REJECT: WOULD_REJECT}[overall]
+        group = {ALLOWED: NO_CHANGE, REFER: APPROVED_REFER, REVIEW: APPROVED_REVIEW,
+                 REJECT: WOULD_REJECT}[overall]
     return {"band": report.band, "band_rule": band_rule, "checks": checks,
             "overall": overall, "group": group}

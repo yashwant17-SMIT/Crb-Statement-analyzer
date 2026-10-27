@@ -4,7 +4,7 @@ from datetime import datetime
 import pytest
 
 import checks
-from checks import ALLOWED, REJECT, REVIEW
+from checks import ALLOWED, REFER, REJECT, REVIEW
 from google_io import cell_links, drive_id, find_columns
 from app.crb_parser import CreditAccount, CreditProfile, ParsedCreditReport
 
@@ -109,10 +109,21 @@ def test_d5_cleared_after_the_cutoff_rejects():
     assert by_code(report(accounts=[closed_npa("15-Jan-2021", 12, "05-Feb-2024")]))["D5"] == REJECT
 
 
-@pytest.mark.parametrize("listed,term,paid", [(None, 12, "01-Jun-2023"), ("15-Jan-2021", None, "01-Jun-2023"),
-                                              ("15-Jan-2021", 12, None)])
-def test_d5_a_missing_date_is_review(listed, term, paid):
-    assert by_code(report(accounts=[closed_npa(listed, term, paid)]))["D5"] == REVIEW
+@pytest.mark.parametrize("listed,term", [(None, 12), ("11-Oct-2021", None), (None, None)])
+def test_d5_cleared_before_the_cutoff_is_allowed_with_maturity_unknown(listed, term):
+    # Akimana Pacifique #2: a 2021 mobile loan, no readable term, cleared Aug 2023.
+    c = checks.d5_closed_npa(report(accounts=[closed_npa(listed, term, "15-Aug-2023")]), CUTOFF)
+    assert c.result == ALLOWED and "maturity unknown" in c.detail
+
+
+def test_d5_unknown_maturity_shows_the_printed_terms():
+    a = closed_npa("11-Oct-2021", None, "15-Aug-2023")
+    a.repayment_terms = "Bullet"
+    assert "(terms 'Bullet')" in checks.d5_closed_npa(report(accounts=[a]), CUTOFF).detail
+
+
+def test_d5_no_clearance_date_is_review():
+    assert by_code(report(accounts=[closed_npa("15-Jan-2021", 12, None)]))["D5"] == REVIEW
 
 
 def test_d5_a_known_late_date_rejects_even_with_another_missing():
@@ -122,8 +133,9 @@ def test_d5_a_known_late_date_rejects_even_with_another_missing():
 # D6
 @pytest.mark.parametrize("dpd,arrears,result", [
     (0, 0, ALLOWED), (15, 150_000, ALLOWED),
-    (16, 0, REVIEW), (5, 150_001, REVIEW), (90, 200_000, REVIEW), (120, 50_000, REVIEW),
-    (91, 50_001, REJECT),
+    (16, 0, REFER), (90, 100_000, REFER),
+    (5, 150_001, REJECT), (16, 100_001, REJECT), (91, 0, REJECT), (120, 50_000, REJECT),
+    (19, 1_039_200, REJECT),   # Akimana Pacifique #10: 10x the Refer limit
 ])
 def test_d6_days_past_due_and_arrears(dpd, arrears, result):
     assert by_code(report(accounts=[acct(days_in_arrears=dpd, arrears_amount=arrears)]))["D6"] == result
@@ -137,8 +149,21 @@ def test_d6_worst_account_wins_and_old_accounts_are_ignored():
     assert by_code(rep)["D6"] == REJECT
 
 
-def test_d6_arrears_without_printed_days_is_review():
-    assert by_code(report(accounts=[acct(days_in_arrears_reported=False, arrears_amount=5_000)]))["D6"] == REVIEW
+@pytest.mark.parametrize("arrears,result", [(5_000, REVIEW), (150_000, REVIEW), (150_001, REJECT)])
+def test_d6_arrears_without_printed_days(arrears, result):
+    rep = report(accounts=[acct(days_in_arrears_reported=False, arrears_amount=arrears)])
+    assert by_code(rep)["D6"] == result
+
+
+@pytest.mark.parametrize("band,group", [("FF", checks.REJECTED_REFER), ("BB", checks.APPROVED_REFER)])
+def test_a_refer_puts_the_customer_in_the_refer_group(band, group):
+    assert checks.evaluate(report(band=band, accounts=[acct(days_in_arrears=30, arrears_amount=20_000)]))["group"] == group
+
+
+def test_review_outranks_refer():
+    rep = report(accounts=[acct(days_in_arrears=30, arrears_amount=20_000),
+                           closed_npa("15-Jan-2021", 12, None)])
+    assert checks.evaluate(rep)["overall"] == REVIEW
 
 
 def test_an_approved_band_with_a_write_off_would_be_rejected():
