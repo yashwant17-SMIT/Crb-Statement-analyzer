@@ -150,3 +150,42 @@ def test_a_missing_or_broken_workbook_state_is_refused(engine, state):
     r = CLIENT.post("/api/v1/intake/assess", data=data, headers={"X-Intake-Token": TOKEN},
                     files=[("crb_file", ("crb.pdf", io.BytesIO(PDF), "application/pdf"))])
     assert r.status_code == 400 and r.json()["detail"]["error"] == "invalid_results_state"
+
+
+def _out(*, open_=True, el=None, crb_findings=(), flags=(), identity="match", parse_complete=True, awaiting=False):
+    out = {"credit_bureau": {"gate": {"band": "BB", "statement_parsing_allowed": open_,
+                                      "reason": "Band FF is below the minimum DD."},
+                             "findings": [{"severity": s, "title": t} for s, t in crb_findings]}}
+    if awaiting:
+        out["decision"] = "awaiting_statement"
+    elif open_:
+        out["statement"] = {
+            "summary": {"loan_eligibility": el or {"status": "eligible", "sanctioned_amount": 800000}},
+            "red_flags": [{"severity": s, "title": t} for s, t in flags],
+            "identity_check": {"status": identity}, "meta": {"parse_complete": parse_complete}}
+    return out
+
+
+@pytest.mark.parametrize("out,verdict,reason,sanctioned", [
+    (_out(), "approved", "", 800000),
+    (_out(open_=False), "rejected", "Band FF is below the minimum DD.", None),
+    (_out(el={"status": "not_eligible", "reason": "Fee cap 20,000 RWF is below the lowest band."}),
+     "rejected", "Fee cap 20,000 RWF is below the lowest band.", None),
+    (_out(crb_findings=[("blocking", "Written-off account"), ("info", "Old enquiry")]),
+     "on_hold", "CRB: Written-off account.", 800000),
+    (_out(flags=[("severe", "Round-tripping"), ("elevated", "Gaps")], identity="mismatch"),
+     "on_hold", "Statement: Round-tripping. The statement does not belong to the CRB applicant.", 800000),
+    (_out(el={"status": "not_assessed", "reason": "Only 2 of 3 months."}),
+     "on_hold", "Eligibility not assessed: Only 2 of 3 months.", None),
+    (_out(parse_complete=False), "on_hold", "The statement could not be read in full.", 800000),
+    (_out(awaiting=True), "on_hold", "No statement to assess.", None),
+])
+def test_the_row_decision_for_the_ops_sheet(out, verdict, reason, sanctioned):
+    assert intake.decision(out) == {"band": "BB", "decision": verdict, "sanctioned_amount": sanctioned,
+                                    "reason": reason}
+
+
+def test_the_route_returns_the_row_decision(engine):
+    engine["gate"](False)
+    row = post().json()["row"]
+    assert row["decision"] == "rejected" and row["band"] == CRB["gate"]["band"]

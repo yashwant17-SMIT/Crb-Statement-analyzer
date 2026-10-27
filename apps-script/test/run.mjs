@@ -75,6 +75,11 @@ class Range {
   each(fn) { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) fn(this.sheet.cell(this.r + i, this.c + j), i, j) }
   grid(fn) { return Array.from({ length: this.nr }, (_, i) => Array.from({ length: this.nc }, (_, j) => fn(this.sheet.cell(this.r + i, this.c + j)))) }
   getRow() { return this.r + 1 }
+  getDataValidation() {
+    const o = this.sheet.cell(this.r, this.c).options
+    return o ? { getCriteriaType: () => 'VALUE_IN_LIST', getCriteriaValues: () => [o] } : null
+  }
+  getA1Notation() { let n = this.c + 1, s = ''; while (n) { s = String.fromCharCode(65 + (n - 1) % 26) + s; n = Math.floor((n - 1) / 26) } return s + (this.r + 1) }
   getNumRows() { return this.nr }
   getValues() { return this.grid((c) => c.value) }
   getDisplayValues() { return this.grid((c) => c.display) }
@@ -101,9 +106,16 @@ const REGISTER_GID = 910001
 
 /** The results workbook, as far as Code.gs can see it through Sheets.*. */
 function workbook(fail) {
-  const wb = { tabs: { Sheet1: 0 }, register: [], batches: [], fail }
+  const wb = { tabs: { Sheet1: 0 }, register: [], batches: [], chipRows: {}, fail }
   wb.api = {
-    get: () => ({ sheets: Object.entries(wb.tabs).map(([title, sheetId]) => ({ properties: { title, sheetId } })) }),
+    get: (id, opts) => {
+      // A row's smart chips, read from the intake sheet.
+      if (opts?.ranges) {
+        const n = Number(/!(\d+):/.exec(opts.ranges[0])[1])
+        return { sheets: [{ data: [{ rowData: wb.chipRows[n] ? [{ values: wb.chipRows[n] }] : [] }] }] }
+      }
+      return { sheets: Object.entries(wb.tabs).map(([title, sheetId]) => ({ properties: { title, sheetId } })) }
+    },
     batchUpdate(body, id) {
       if (wb.fail) throw new Error(wb.fail)
       wb.batches.push({ id, ops: body.requests })
@@ -147,6 +159,7 @@ function harness({ rows, files, respond, props = {}, failWrite }) {
       getActive: () => ss, getActiveSheet: () => intake, flush() {},
       getActiveRangeList: () => ({ getRanges: () => [intake.getRange(2, 1, 2, 1)] }),
       getUi: () => ({ alert() {}, ButtonSet: {} }),
+      DataValidationCriteria: { VALUE_IN_LIST: 'VALUE_IN_LIST', VALUE_IN_RANGE: 'VALUE_IN_RANGE' },
     },
     PropertiesService: {
       getScriptProperties: () => ({
@@ -169,7 +182,8 @@ function harness({ rows, files, respond, props = {}, failWrite }) {
     },
     Sheets: { Spreadsheets: wb.api },
     LockService: { getDocumentLock: () => ({ tryLock: () => true, releaseLock() {} }) },
-    Session: { getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' }) },
+    Session: { getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' }), getScriptTimeZone: () => 'Africa/Kigali' },
+    Utilities: { formatDate: (d) => d.toISOString().slice(0, 16).replace('T', ' ') },
     ScriptApp: { getProjectTriggers: () => [] },
     Date,
   }
@@ -216,8 +230,10 @@ const OK = {
   results: { ops: [{ addSheet: { properties: { sheetId: 5, title: 'BENIE N · 1199' } } }], gid: 5, tab: 'BENIE N · 1199' },
 }
 const col = (h, name) => h.intake.cells[0].findIndex((c) => c.value === name)
-const status = (h, n) => h.intake.cells[n - 1][col(h, 'Ledger status')].value
-const result = (h, n) => h.intake.cells[n - 1][col(h, 'Ledger result')].value
+// Ledger assessment reads "<status> <when> · <result>" or "Error: <message>".
+const assessment = (h, n) => String(h.intake.cells[n - 1][col(h, 'Ledger assessment')].value)
+const status = (h, n) => /^(Done|Blocked at CRB|Awaiting statement|Error|Processing…)/.exec(assessment(h, n))?.[1]
+const result = (h, n) => assessment(h, n).replace(/^Error: /, '')
 
 /* ------------------------------------------------------------------ tests */
 const tests = {
@@ -237,7 +253,7 @@ const tests = {
     // The second row sees the tab the first one created.
     assert.equal(JSON.parse(h.fetches[1].opts.payload.results_state).tabs['BENIE N · 1199'], 5)
     // Ledger columns are added after the last header (G), once.
-    assert.deepEqual(h.intake.cells[0].slice(7).map((c) => c.value), ['Ledger status', 'Ledger result', 'Ledger assessed at', 'Ledger report'])
+    assert.deepEqual(h.intake.cells[0].slice(7).map((c) => c.value), ['Ledger assessment', 'Ledger report'])
     assert.equal(status(h, 2), 'Done')
     assert.equal(status(h, 4), 'Done')
     assert.deepEqual(h.wb.batches.map((b) => b.id), ['intake-id', 'intake-id'], 'default: this spreadsheet')
@@ -266,7 +282,7 @@ const tests = {
     h.ctx.assessPending()
     h.ctx.assessPending()
     assert.equal(h.fetches.length, 2)
-    h.intake.cells[1][col(h, 'Ledger status')].value = ''
+    h.intake.cells[1][col(h, 'Ledger assessment')].value = ''
     h.ctx.assessPending()
     assert.equal(h.fetches.length, 3)
   },
@@ -274,8 +290,10 @@ const tests = {
   'a row that was interrupted mid-run is picked up again'() {
     const h = harness({ rows: [HEADER, row()], files: FILES, respond: () => ({ code: 200, body: OK }) })
     h.ctx.assessPending()
-    h.intake.cells[1][col(h, 'Ledger status')].value = 'Processing…'
-    h.intake.cells[1][col(h, 'Ledger assessed at')].value = new Date(Date.now() - 60 * 60 * 1000)
+    h.intake.cells[1][col(h, 'Ledger assessment')].value = 'Processing… ' + new Date(Date.now() - 5 * 60 * 1000).toISOString()
+    h.ctx.assessPending()
+    assert.equal(h.fetches.length, 1, 'a run in progress is left alone')
+    h.intake.cells[1][col(h, 'Ledger assessment')].value = 'Processing… ' + new Date(Date.now() - 60 * 60 * 1000).toISOString()
     h.ctx.assessPending()
     assert.equal(h.fetches.length, 2)
   },
@@ -307,12 +325,96 @@ const tests = {
     })
     h.ctx.assessPending()
     assert.equal(status(h, 2), 'Error')
-    assert.equal(result(h, 2), 'Customer type is empty. Enter New or Existing.')
+    assert.equal(assessment(h, 2), 'Error: Customer type is empty. Enter New or Existing.')
   },
 
   'a sheet without the required columns is refused by name'() {
     const h = () => harness({ rows: [['Customer', 'CRB', 'Amount']], files: FILES, respond: () => ({}) })
     assert.throws(() => h().ctx.assessPending(), /no Statement link, Customer type column/)
+  },
+
+  'an ops sheet with a title row and its own header names'() {
+    const header = ['Customer Name', 'TYPE of customer', 'Loan amount requested', 'ID Copy', 'MoMo/BoK Statement', 'CRB Link', 'CRB band (AA, BB etc)']
+    const app = ['Benie N', 'New', '1,500,000', 'id.pdf', ST1, { value: 'crb', link: CRB }, 'BB']
+    const h = harness({ rows: [['Loan applications — October'], [], header, app], files: FILES, respond: () => ({ code: 200, body: OK }) })
+    h.ctx.assessPending()
+    assert.equal(h.fetches.length, 1, 'the title and blank rows are not applications')
+    const p = h.fetches[0].opts.payload
+    assert.equal(p.crb_file.name, 'crb.pdf', '"CRB Link" is the report, "CRB band" is not')
+    assert.equal(p.statement_file_1.name, 'jan.pdf')
+    assert.equal(p.customer_type, 'New')
+    assert.equal(p.requested_amount, '1,500,000')
+    const at = h.intake.cells[2].findIndex((c) => c.value === 'Ledger assessment')
+    assert.equal(at, 7, 'Ledger columns go on the header row')
+    assert.match(h.intake.cells[3][at].value, /^Done /)
+  },
+
+  'a Drive smart chip is read through the Sheets API'() {
+    const h = harness({ rows: [HEADER, row({ crb: 'crb.pdf' })], files: FILES, respond: () => ({ code: 200, body: OK }) })
+    const chips = []
+    chips[2] = { chipRuns: [{ startIndex: 0, chip: { richLinkProperties: { uri: CRB, mimeType: 'application/pdf' } } }] }
+    h.wb.chipRows[2] = chips
+    h.ctx.assessPending()
+    assert.equal(status(h, 2), 'Done', result(h, 2))
+    assert.equal(h.fetches[0].opts.payload.crb_file.name, 'crb.pdf')
+  },
+
+  'a CRB cell without a link says what it shows'() {
+    const h = harness({ rows: [HEADER, row({ crb: 'crb report.pdf' })], files: FILES, respond: () => ({ code: 200, body: OK }) })
+    h.ctx.assessPending()
+    assert.equal(h.fetches.length, 0)
+    assert.match(result(h, 2), /No CRB link in C2 \(it shows "crb report.pdf"; paste the Drive link itself\)/)
+  },
+
+  'the ops sheet: outcome in its own columns, signed-off rows left alone'() {
+    const header = ['S.No', 'Application ID', 'RM/Sales Rep', 'Cust ID', 'Customer Name', 'TYPE of customer', 'Date Applied',
+      'Existing Customer check', 'Current FA Amount', 'Visit date (along with GPS check)', 'Business vintage (from Business registration form)',
+      'Business photos (atleast 4)', 'Loan Purpose', 'Description of purpose', 'Business Type', 'Loan amount requested', 'Phone Number',
+      'ID Copy', 'MoMo/BoK Statement', 'Type of statement', 'Cash Flow Analysis Link', 'CRB Link', 'CRB band (AA, BB etc)',
+      'PA Open Total Value(RWF) (from CRB report)', 'Number of active loans (Open PA from CRB Report)', 'Comments',
+      'Signed off by Vivianne (Link)', 'Status Signed off by Credit risk team', 'Sanctioned Amount', 'Basis of Rejection/ on-hold']
+    const at = (name) => header.indexOf(name)
+    const app = (over = {}) => {
+      const r = header.map(() => '')
+      Object.assign(r, { [at('Customer Name')]: 'Benie N', [at('TYPE of customer')]: 'Existing customer (25%)',
+        [at('Loan amount requested')]: 1500000, [at('MoMo/BoK Statement')]: ST1, [at('Type of statement')]: 'MoMo',
+        [at('CRB Link')]: { value: 'crb', link: CRB }, [at('PA Open Total Value(RWF) (from CRB report)')]: 250000,
+        [at('Status Signed off by Credit risk team')]: { value: '', options: ['Approved', 'Rejected', 'On Hold'] } })
+      for (const [k, v] of Object.entries(over)) r[at(k)] = v
+      return r
+    }
+    const decided = app({ 'Status Signed off by Credit risk team': 'Approved' })
+    const row = { band: 'BB', decision: 'on_hold', sanctioned_amount: 800000, reason: 'CRB: Written-off account.' }
+    const h = harness({ rows: [header, app(), decided], files: FILES, respond: () => ({ code: 200, body: { ...OK, row } }) })
+    h.ctx.assessPending()
+    assert.equal(h.fetches.length, 1, 'a row the credit risk team already signed off is not pending')
+    const p = h.fetches[0].opts.payload
+    assert.equal(p.crb_file.name, 'crb.pdf')
+    assert.deepEqual(Object.keys(p).filter((k) => k.startsWith('statement_file')), ['statement_file_1'])
+    assert.equal(p.customer_type, 'Existing customer (25%)')
+    const cell = (name) => h.intake.cells[1][at(name)].value
+    assert.equal(cell('CRB band (AA, BB etc)'), 'BB')
+    assert.equal(cell('Status Signed off by Credit risk team'), 'On Hold', "the dropdown's own spelling")
+    assert.equal(cell('Sanctioned Amount'), 800000)
+    assert.equal(cell('Basis of Rejection/ on-hold'), 'CRB: Written-off account.')
+    assert.deepEqual(h.intake.cells[0].slice(header.length).map((c) => c.value), ['Ledger assessment', 'Ledger report'])
+    assert.match(String(h.intake.cells[1][header.length].value), /^Done \d{4}-\d\d-\d\d \d\d:\d\d · /)
+  },
+
+  'a status dropdown without the option is left for a person'() {
+    const header = ['Customer type', 'Amount', 'CRB', 'Statement', 'Status', 'Reason']
+    const h = harness({
+      rows: [header, ['New', 500000, { value: 'c', link: CRB }, ST1, { value: '', options: ['Yes', 'No'] }, '']],
+      files: FILES, respond: () => ({ code: 200, body: { ...OK, row: { band: 'AA', decision: 'approved', sanctioned_amount: 500000, reason: '' } } }),
+    })
+    h.ctx.assessPending()
+    assert.equal(h.intake.cells[1][4].value, '')
+    assert.match(String(h.intake.cells[1][6].value), /Status not set: its dropdown has no option for "Approved"/)
+  },
+
+  'a tab with no header row names the tabs'() {
+    const h = harness({ rows: [[], ['x']], files: FILES, respond: () => ({}) })
+    assert.throws(() => h.ctx.assessPending(), /No header row .* "Applications" tab.*INTAKE_TAB.*Tabs: Applications/)
   },
 
   'LEDGER_URL must be https'() {

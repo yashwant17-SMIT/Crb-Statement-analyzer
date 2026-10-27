@@ -24,7 +24,10 @@ class IntakeFieldError(ValueError):
 
 
 def customer_type(value: Any) -> str:
-    text = re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+    # A dropdown may annotate the option, e.g. "Existing customer (25%)". The
+    # bracket is a label only: the rates come from the policy, not the sheet.
+    text = re.sub(r"\([^)]*\)", " ", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip().casefold()
     if not text:
         raise IntakeFieldError("Customer type is empty. Enter New or Existing.")
     if text not in _TYPES:

@@ -7,12 +7,14 @@ from app.intake_fields import IntakeFieldError, customer_type, provider, request
 @pytest.mark.parametrize("cell,expected", [
     ("New", "new"), ("new customer", "new"), ("  NEW  ", "new"),
     ("Existing", "existing"), ("Existing  Customer", "existing"), ("repeat", "existing"),
+    # The ops sheet's dropdown options.
+    ("Existing customer (25%)", "existing"), ("New customer (10%)", "new"),
 ])
 def test_customer_type_reads_the_ways_people_type_it(cell, expected):
     assert customer_type(cell) == expected
 
 
-@pytest.mark.parametrize("cell", ["", None, "vip", "n"])
+@pytest.mark.parametrize("cell", ["", None, "vip", "n", "(25%)", "VIP customer (25%)"])
 def test_customer_type_refuses_anything_else(cell):
     with pytest.raises(IntakeFieldError):
         customer_type(cell)

@@ -11,11 +11,14 @@
  *   results workbook   Register, Monthly revenue, Bureau accounts, Findings,
  *                      and the customer's formatted report tab, exactly as
  *                      Ledger's own Sheets export lays them out
- *   this row           Ledger status, Ledger result, Ledger assessed at, and
- *                      Ledger report: a link to the customer's tab
+ *   this row           the outcome in the sheet's own columns when it has
+ *                      them (CRB band, decision status, sanctioned amount,
+ *                      reason), plus Ledger assessment (what happened, when)
+ *                      and Ledger report (a link to the customer's tab)
  *
- * Columns are found by header, in any order (see FIELDS). A row is pending
- * while its Ledger status is empty; clear it to run the row again.
+ * Columns are found by header, in any order (see FIELDS and LOOSE). A row is
+ * pending while both its Ledger assessment and its decision status are empty;
+ * clear them to run the row again, or select it and use Assess selected rows.
  *
  * Script properties (Project Settings → Script properties):
  *   LEDGER_URL         https://ledger.example.com   (required)
@@ -26,7 +29,9 @@
  * Needs the Google Sheets advanced service (appsscript.json enables it).
  */
 
-var LEDGER_COLS = ['Ledger status', 'Ledger result', 'Ledger assessed at', 'Ledger report'];
+var ASSESSMENT = 'Ledger assessment', REPORT = 'Ledger report';
+var LEDGER_COLS = [ASSESSMENT, REPORT];
+// Exact header names, compared without case, spaces or punctuation.
 var FIELDS = {
   customer: ['customer', 'customername', 'name', 'applicant', 'applicantname'],
   crb: ['crb', 'crblink', 'crbreport', 'crbreportlink', 'crburl', 'crbpdf',
@@ -35,7 +40,34 @@ var FIELDS = {
   requested_amount: ['requestedamount', 'requestedamountrwf', 'amount', 'amountrwf',
                      'loanamount', 'loanamountrwf', 'amountrequested'],
   provider: ['provider', 'statementprovider'],
+  // Where the outcome goes, when the sheet has these columns.
+  band: ['band', 'crbband'],
+  decision: ['decision', 'status', 'creditdecision'],
+  sanctioned: ['sanctionedamount', 'approvedamount'],
+  reason: ['reason', 'rejectionreason', 'basisofrejection'],
 };
+// Looser matches for a field no header names exactly, so "TYPE of customer"
+// or "Status Signed off by Credit risk team" work without renaming. "PA Open
+// Total Value (from CRB report)" is not the CRB link.
+var LOOSE = {
+  crb: function (k) { return /crb|bureau|credit/.test(k) && /link|report|url|pdf|file/.test(k) &&
+                             !/from|band|value|total|number|score/.test(k); },
+  customer_type: function (k) { return /type/.test(k) && /customer|client|borrower|applicant/.test(k); },
+  requested_amount: function (k) { return /amount/.test(k) && /request|loan|applied/.test(k) &&
+                                          !/approv|sanction|disburs|current/.test(k); },
+  band: function (k) { return /band/.test(k); },
+  decision: function (k) { return /status|decision/.test(k) && /sign|credit|risk|underwrit/.test(k); },
+  sanctioned: function (k) { return /sanction/.test(k); },
+  reason: function (k) { return /reason|basis|reject/.test(k); },
+};
+// The decision as written when the status column has no dropdown, and how to
+// find the matching option when it does.
+var DECISIONS = {
+  approved: { label: 'Approved', match: /approv|accept|pass/i },
+  rejected: { label: 'Rejected', match: /reject|declin|fail/i },
+  on_hold: { label: 'On hold', match: /hold|pend|refer|review/i },
+};
+var HEADER_SCAN_ROWS = 15;               // the header row may sit under a title
 var PROCESSING = 'Processing…';
 var MAX_BYTES = 25 * 1024 * 1024;        // the server's MAX_UPLOAD_MB
 var TIME_BUDGET_MS = 4.5 * 60 * 1000;    // Apps Script stops a run at 6 minutes
@@ -61,7 +93,7 @@ function assessSelected() {
   var rows = [];
   SpreadsheetApp.getActiveRangeList().getRanges().forEach(function (range) {
     for (var n = range.getRow(); n < range.getRow() + range.getNumRows(); n++) {
-      if (n > 1 && n <= ctx.values.length && rows.indexOf(n) < 0) rows.push(n);
+      if (n > ctx.headerRow + 1 && n <= ctx.values.length && rows.indexOf(n) < 0) rows.push(n);
     }
   });
   if (!rows.length) throw new Error('Select one or more application rows (not the header).');
@@ -92,6 +124,12 @@ function disableAutomaticRuns(quiet) {
   if (quiet !== true) SpreadsheetApp.getActive().toast('Automatic runs are off.', 'Ledger');
 }
 
+// ngrok's free plan shows a warning page to browser-like callers, which
+// includes Apps Script; this header skips it. Other hosts ignore it.
+function headers_(cfg) {
+  return { 'X-Intake-Token': cfg.token, 'ngrok-skip-browser-warning': '1' };
+}
+
 function checkConnection() {
   var cfg = config_();
   var ui = SpreadsheetApp.getUi();
@@ -99,7 +137,7 @@ function checkConnection() {
   try {
     // No files: a correct token gets "no bureau report", a wrong one 401.
     res = UrlFetchApp.fetch(cfg.url + '/api/v1/intake/assess', {
-      method: 'post', payload: { probe: '1' }, headers: { 'X-Intake-Token': cfg.token },
+      method: 'post', payload: { probe: '1' }, headers: headers_(cfg),
       muteHttpExceptions: true,
     });
   } catch (e) {
@@ -141,7 +179,7 @@ function run_(ctx, rows, interactive) {
 /** Assess sheet row n (1-based). True when Ledger returned an assessment. */
 function assessRow_(ctx, n) {
   var row = readRow_(ctx, n);
-  setStatus_(ctx, n, PROCESSING, '', '');
+  setLedger_(ctx, n, PROCESSING + ' ' + new Date().toISOString(), '');
   SpreadsheetApp.flush();
   try {
     if (row.problems.length) throw new Error(row.problems.join(' '));
@@ -157,7 +195,7 @@ function assessRow_(ctx, n) {
     var res;
     try {
       res = UrlFetchApp.fetch(ctx.cfg.url + '/api/v1/intake/assess', {
-        method: 'post', payload: payload, headers: { 'X-Intake-Token': ctx.cfg.token },
+        method: 'post', payload: payload, headers: headers_(ctx.cfg),
         muteHttpExceptions: true,
       });
     } catch (e) {
@@ -174,10 +212,11 @@ function assessRow_(ctx, n) {
     }
     var link = '=HYPERLINK("https://docs.google.com/spreadsheets/d/' + ctx.cfg.resultsId +
       '/edit#gid=' + body.results.gid + '","Open report")';
-    setStatus_(ctx, n, body.status, body.result, link);
+    var note = setOutcome_(ctx, n, body.row || {});
+    setLedger_(ctx, n, body.status + ' ' + stamp_() + ' · ' + body.result + note, link);
     return true;
   } catch (e) {
-    setStatus_(ctx, n, 'Error', e.message, '');
+    setLedger_(ctx, n, 'Error: ' + e.message, '');
     return false;
   }
 }
@@ -217,48 +256,85 @@ function config_() {
 
 function key_(s) { return String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, ''); }
 
-function columns_(ctx) {
-  var header = ctx.display[0] || [];
-  var cols = { statement: [], out: {} };
-  header.forEach(function (h, i) {
-    var text = String(h).trim(), k = key_(text);
-    if (!k) return;
-    if (LEDGER_COLS.indexOf(text) >= 0) { cols.out[text] = i; return; }
-    for (var f in FIELDS) {
-      if (FIELDS[f].indexOf(k) >= 0 && !(f in cols)) { cols[f] = i; return; }
-    }
-    if (k.indexOf('statement') >= 0) cols.statement.push(i);
+// Exact names win over loose ones, and each column is used once: the first
+// header that names a field, left to right. Other Ledger columns, such as
+// those an older version of this script added, are left alone.
+function headerColumns_(header) {
+  var cols = { statement: [], out: {} }, used = {};
+  var keys = header.map(function (h, i) {
+    var text = String(h).trim();
+    if (LEDGER_COLS.indexOf(text) >= 0) { cols.out[text] = i; used[i] = true; }
+    else if (/^ledger/i.test(text)) used[i] = true;
+    return key_(text);
   });
-  var missing = [];
-  if (!('crb' in cols)) missing.push('CRB link');
-  if (!cols.statement.length) missing.push('Statement link');
-  if (!('customer_type' in cols)) missing.push('Customer type');
-  if (!('requested_amount' in cols)) missing.push('Requested amount');
-  if (missing.length) {
-    throw new Error('The "' + ctx.sheet.getName() + '" tab has no ' + missing.join(', ') +
-      ' column. Headers found: ' + header.filter(String).join(', ') + '.');
+  function claim(f, test) {
+    for (var i = 0; i < keys.length && !(f in cols); i++) {
+      if (keys[i] && !used[i] && test(keys[i])) { cols[f] = i; used[i] = true; }
+    }
   }
+  Object.keys(FIELDS).forEach(function (f) {
+    claim(f, function (k) { return FIELDS[f].indexOf(k) >= 0; });
+  });
+  Object.keys(LOOSE).forEach(function (f) { claim(f, LOOSE[f]); });
+  keys.forEach(function (k, i) {
+    if (!used[i] && k.indexOf('statement') >= 0 && !/type|provider/.test(k)) cols.statement.push(i);
+  });
+  cols.missing = [];
+  if (!('crb' in cols)) cols.missing.push('CRB link');
+  if (!cols.statement.length) cols.missing.push('Statement link');
+  if (!('customer_type' in cols)) cols.missing.push('Customer type');
+  if (!('requested_amount' in cols)) cols.missing.push('Requested amount');
+  return cols;
+}
+
+// The header is the first of the top rows that names the most fields.
+function columns_(ctx) {
+  var best = null;
+  for (var r = 0; r < Math.min(HEADER_SCAN_ROWS, ctx.display.length); r++) {
+    var cols = headerColumns_(ctx.display[r]);
+    if (!best || cols.missing.length < best.cols.missing.length) best = { row: r, cols: cols };
+    if (!cols.missing.length) break;
+  }
+  if (!best || best.cols.missing.length === 4) {
+    var tabs = SpreadsheetApp.getActive().getSheets().map(function (s) { return s.getName(); });
+    throw new Error('No header row in the top ' + HEADER_SCAN_ROWS + ' rows of the "' +
+      ctx.sheet.getName() + '" tab. If the applications are on another tab, set INTAKE_TAB ' +
+      'to its name. Tabs: ' + tabs.join(', ') + '.');
+  }
+  var header = ctx.display[best.row];
+  cols = best.cols;
+  if (cols.missing.length) {
+    throw new Error('The "' + ctx.sheet.getName() + '" tab has no ' + cols.missing.join(', ') +
+      ' column (header row ' + (best.row + 1) + '). Headers found: ' +
+      header.filter(String).join(', ') + '.');
+  }
+  ctx.headerRow = best.row;
   // The Ledger columns go after the last header, once.
   var next = header.length;
   LEDGER_COLS.forEach(function (name) {
     if (!(name in cols.out)) {
-      ctx.sheet.getRange(1, next + 1).setValue(name).setFontWeight('bold');
+      ctx.sheet.getRange(best.row + 1, next + 1).setValue(name).setFontWeight('bold');
       cols.out[name] = next++;
     }
   });
   return cols;
 }
 
+// Pending: not yet assessed by Ledger, not already decided by a person, and
+// not blank. A run interrupted mid-row is retried once it is STALE_MS old.
 function pendingRows_(ctx) {
-  var rows = [];
-  var status = ctx.cols.out['Ledger status'], at = ctx.cols.out['Ledger assessed at'];
-  for (var i = 1; i < ctx.values.length; i++) {
-    var s = String(ctx.values[i][status] == null ? '' : ctx.values[i][status]).trim();
-    var stale = s === PROCESSING && Date.now() - new Date(ctx.values[i][at]).getTime() > STALE_MS;
-    if ((s === '' || stale) && !isBlank_(ctx, i)) rows.push(i + 1);
+  var rows = [], c = ctx.cols;
+  for (var i = ctx.headerRow + 1; i < ctx.values.length; i++) {
+    var s = text_(ctx.values[i][c.out[ASSESSMENT]]);
+    var stale = s.indexOf(PROCESSING) === 0 &&
+      !(Date.now() - Date.parse(s.slice(PROCESSING.length).trim()) <= STALE_MS);
+    var decided = c.decision != null && text_(ctx.values[i][c.decision]) !== '';
+    if ((s === '' || stale) && !decided && !isBlank_(ctx, i)) rows.push(i + 1);
   }
   return rows;
 }
+
+function text_(v) { return String(v == null ? '' : v).trim(); }
 
 function isBlank_(ctx, i) {
   var c = ctx.cols;
@@ -272,7 +348,11 @@ function readRow_(ctx, n) {
   var crb = linksIn_(ctx, i, c.crb);
   var statements = [];
   c.statement.forEach(function (j) { statements = statements.concat(linksIn_(ctx, i, j)); });
-  if (!crb.length) problems.push('No CRB link.');
+  if (!crb.length) {
+    var shown = String(ctx.display[i][c.crb]).trim();
+    problems.push('No CRB link in ' + ctx.sheet.getRange(n, c.crb + 1).getA1Notation() +
+      (shown ? ' (it shows "' + shown + '"; paste the Drive link itself).' : ' (the cell is empty).'));
+  }
   else if (crb.length > 1) problems.push('The CRB cell has more than one link.');
   crb.slice(0, 1).concat(statements).forEach(function (link) {
     if (!driveId_(link)) problems.push('Not a Google Drive file link: ' + link);
@@ -299,7 +379,34 @@ function linksIn_(ctx, i, j) {
   var f = /HYPERLINK\(\s*"([^"]+)"/i.exec(ctx.formulas[i][j] || '');
   if (f) found.push(f[1]);
   found = found.concat(String(ctx.display[i][j]).match(/https?:\/\/[^\s,;"'<>]+/g) || []);
-  return found.filter(function (link, k) { return link && found.indexOf(link) === k; });
+  found = found.filter(function (link, k) { return link && found.indexOf(link) === k; });
+  // A Drive smart chip shows the file name; only the Sheets API has its link.
+  if (!found.length && String(ctx.display[i][j]).trim()) found = chipLinks_(ctx, i + 1)[j] || [];
+  return found;
+}
+
+/** The links in row n's smart chips and cell hyperlinks, by column; one API call per row. */
+function chipLinks_(ctx, n) {
+  ctx.chips = ctx.chips || {};
+  if (ctx.chips[n]) return ctx.chips[n];
+  var out = {};
+  try {
+    var range = "'" + ctx.sheet.getName().replace(/'/g, "''") + "'!" + n + ':' + n;
+    var res = Sheets.Spreadsheets.get(SpreadsheetApp.getActive().getId(),
+      { ranges: [range], fields: 'sheets.data.rowData.values(chipRuns,hyperlink)' });
+    var data = ((res.sheets || [])[0] || {}).data || [];
+    var row = ((data[0] || {}).rowData || [])[0] || {};
+    (row.values || []).forEach(function (v, j) {
+      var links = (v.chipRuns || []).map(function (r) {
+        return r.chip && r.chip.richLinkProperties && r.chip.richLinkProperties.uri;
+      }).filter(Boolean);
+      if (v.hyperlink && links.indexOf(v.hyperlink) < 0) links.push(v.hyperlink);
+      if (links.length) out[j] = links;
+    });
+  } catch (e) {
+    // Leave it empty: the row's error names the cell and what it shows.
+  }
+  return (ctx.chips[n] = out);
 }
 
 /** The file ID of a Drive or Docs link; null for anything else, folders included. */
@@ -326,17 +433,50 @@ function pdf_(link) {
 }
 
 /* ------------------------------------------------------------- writing */
-function setStatus_(ctx, n, status, result, link) {
-  var out = ctx.cols.out;
-  var values = {
-    'Ledger status': status, 'Ledger result': result, 'Ledger assessed at': new Date(), 'Ledger report': link,
-  };
-  LEDGER_COLS.forEach(function (name) {
-    var cell = ctx.sheet.getRange(n, out[name] + 1);
-    cell.setValue(values[name]);
-    if (name === 'Ledger assessed at') cell.setNumberFormat('yyyy-mm-dd hh:mm');
-    ctx.values[n - 1][out[name]] = values[name];
-  });
+function setLedger_(ctx, n, assessment, link) {
+  setCell_(ctx, n, ctx.cols.out[ASSESSMENT], assessment);
+  setCell_(ctx, n, ctx.cols.out[REPORT], link);
+}
+
+function setCell_(ctx, n, j, value) {
+  ctx.sheet.getRange(n, j + 1).setValue(value);
+  ctx.values[n - 1][j] = value;
+}
+
+function stamp_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
+}
+
+/**
+ * The outcome into the sheet's own columns, those it has. Returns a note for
+ * Ledger assessment when the status dropdown has no matching option, in which
+ * case the status cell is left for a person.
+ */
+function setOutcome_(ctx, n, row) {
+  var c = ctx.cols, note = '';
+  if (c.band != null) setCell_(ctx, n, c.band, row.band || '');
+  if (c.sanctioned != null) setCell_(ctx, n, c.sanctioned, row.sanctioned_amount == null ? '' : row.sanctioned_amount);
+  if (c.reason != null) setCell_(ctx, n, c.reason, row.reason || '');
+  var d = DECISIONS[row.decision];
+  if (c.decision != null && d) {
+    var label = decisionLabel_(ctx.sheet.getRange(n, c.decision + 1), d);
+    if (label) setCell_(ctx, n, c.decision, label);
+    else note = ' · Status not set: its dropdown has no option for "' + d.label + '".';
+  }
+  return note;
+}
+
+/** The status to write: the dropdown's matching option, or the plain label without one. */
+function decisionLabel_(cell, d) {
+  var rule = cell.getDataValidation && cell.getDataValidation();
+  if (!rule) return d.label;
+  var type = rule.getCriteriaType(), args = rule.getCriteriaValues();
+  var options;
+  if (type === SpreadsheetApp.DataValidationCriteria.VALUE_IN_LIST) options = args[0];
+  else if (type === SpreadsheetApp.DataValidationCriteria.VALUE_IN_RANGE) {
+    options = [].concat.apply([], args[0].getDisplayValues());
+  } else return d.label;
+  return options.map(String).filter(function (o) { return d.match.test(o); })[0] || null;
 }
 
 /**

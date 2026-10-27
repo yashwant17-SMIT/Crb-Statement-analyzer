@@ -15,7 +15,8 @@ Output lands in the results workbook exactly as the Sheets export writes it
 does not write it. The script sends the workbook's current tabs and Register
 column, the service answers with the one batchUpdate that records the
 assessment (sheets.plan), and the script applies it as the sheet owner. The
-intake row then gets the status and a link to the customer's tab.
+intake row then gets the decision (band, Approved / Rejected / On hold,
+sanctioned amount, reason), the status and a link to the customer's tab.
 """
 from __future__ import annotations
 
@@ -58,6 +59,51 @@ def outcome(out: dict) -> tuple[str, str]:
     return "Done", " · ".join(parts)
 
 
+def decision(out: dict) -> dict:
+    """The ops sheet's outcome columns: CRB band, decision, sanctioned amount, reason.
+
+    Approved needs everything to clear: the gate, statement eligibility, no
+    blocking bureau finding, no severe statement finding and a matching
+    identity. A failed gate or an ineligible statement is Rejected; anything
+    left for a person to clear is On hold, with what to clear as the reason.
+    """
+    crb = out.get("credit_bureau") or {}
+    gate = crb.get("gate") or {}
+    band = gate.get("band") or ""
+
+    def row(verdict: str, reason: str = "", sanctioned: Optional[int] = None) -> dict:
+        return {"band": band, "decision": verdict, "sanctioned_amount": sanctioned, "reason": reason}
+
+    if not gate.get("statement_parsing_allowed"):
+        return row("rejected", gate.get("reason") or f"CRB band {band or '?'} is blocked by credit policy.")
+    if out.get("decision") == "awaiting_statement":
+        return row("on_hold", "No statement to assess.")
+    rep = out.get("statement") or {}
+    el = (rep.get("summary") or {}).get("loan_eligibility") or {}
+    if el.get("status") == "not_eligible":
+        return row("rejected", el.get("reason") or "Not eligible on the statement.")
+
+    reasons = []
+    if el.get("status") != "eligible":
+        reasons.append(_sentence("Eligibility not assessed: " + (el.get("reason") or "see the report")))
+    blocking = [f.get("title") for f in crb.get("findings") or [] if f.get("severity") == "blocking"]
+    if blocking:
+        reasons.append(_sentence("CRB: " + "; ".join(filter(None, blocking))))
+    severe = [f.get("title") for f in rep.get("red_flags") or [] if f.get("severity") == "severe"]
+    if severe:
+        reasons.append(_sentence("Statement: " + "; ".join(filter(None, severe))))
+    if (rep.get("identity_check") or {}).get("status") == "mismatch":
+        reasons.append("The statement does not belong to the CRB applicant.")
+    if (rep.get("meta") or {}).get("parse_complete") is False:
+        reasons.append("The statement could not be read in full.")
+    sanctioned = el.get("sanctioned_amount") if el.get("status") == "eligible" else None
+    return row("on_hold" if reasons else "approved", " ".join(reasons), sanctioned)
+
+
+def _sentence(text: str) -> str:
+    return text.rstrip(". ") + "."
+
+
 class StateError(ValueError):
     """The results-workbook state the script sent cannot be used."""
 
@@ -78,5 +124,5 @@ def for_sheet(out: dict, files: dict, tabs: dict[str, int],
               register: list[tuple[str, str]]) -> dict:
     """The row's status and result, and the results-workbook write."""
     status, result = outcome(out)
-    return {"status": status, "result": result,
+    return {"status": status, "result": result, "row": decision(out),
             "results": sheets.plan(out["credit_bureau"], out.get("statement"), files, tabs, register)}

@@ -15,7 +15,7 @@ Intake sheet ── Ledger ▸ Assess … ──▶ Apps Script (runs as the own
                                        │ → the Sheets write that records it
                                        ▼
    Apps Script applies that write to the results workbook, then sets the row:
-   Ledger status · Ledger result · Ledger assessed at · Ledger report (link)
+   CRB band · decision status · sanctioned amount · reason · Ledger assessment · Ledger report (link)
 ```
 
 ## Where the output goes
@@ -29,8 +29,24 @@ Sheets export lays it out:
 | **Monthly revenue**, **Bureau accounts**, **Findings** | One row per month, account or finding, keyed by Assessment ID. |
 | **`<applicant> · <national ID>`** | The formatted report for the customer's latest assessment. |
 
-The intake sheet only gets the four Ledger columns. **Ledger report** links
-to the customer's tab in the results workbook.
+The intake row gets the outcome in its own columns, the ones it has, plus two
+Ledger columns. **Ledger report** links to the customer's tab in the results
+workbook.
+
+| Column (found by header) | Written |
+|---|---|
+| CRB band, e.g. *CRB band (AA, BB etc)* | The bureau band. |
+| Decision status, e.g. *Status Signed off by Credit risk team*, *Status*, *Decision* | **Approved**, **Rejected** or **On hold**. With a dropdown, the option that matches (e.g. *On Hold*); if none matches, the cell is left empty and Ledger assessment says so. |
+| Sanctioned amount, e.g. *Sanctioned Amount* | The sanctioned RWF when the statement is eligible; otherwise empty. |
+| Reason, e.g. *Basis of Rejection/ on-hold*, *Reason* | Why it was rejected or put on hold; empty when approved. |
+| **Ledger assessment** *(added)* | `Done 2026-10-15 14:02 · Band AA · …`, `Blocked at CRB …`, or `Error: …`. |
+| **Ledger report** *(added)* | Link to the customer's tab. |
+
+The decision is Ledger's recommendation:
+
+- **Rejected**: the CRB band is below the minimum, or the statement is not eligible.
+- **On hold**: anything a person has to clear. That is a blocking bureau finding, a severe statement finding, an identity mismatch, a statement that could not be read in full, eligibility not assessed, or no statement.
+- **Approved**: otherwise.
 
 The results workbook is set by `RESULTS_SHEET_ID`. Leave it unset to put the
 results tabs into the intake spreadsheet itself, next to the applications.
@@ -40,26 +56,32 @@ the same as the export and changes with it.
 ## The sheet
 
 One row per application. Columns are found by header, in any order, and
-extra columns are ignored.
+extra columns are ignored. The header row can sit under a title: the script
+looks for it in the top 15 rows.
 
 | Column | Accepted headers |
 |---|---|
 | Customer *(optional)* | Customer, Customer name, Name, Applicant |
-| Bureau report | CRB, CRB link, CRB report, Bureau report, Credit report |
+| Bureau report | CRB, CRB link, CRB report, Bureau report, Credit report, or any header with CRB/bureau/credit and link/report/url/pdf/file |
 | Statement(s) | Any header containing "statement". Several columns, or several links in one cell, are combined. |
-| Customer type | Customer type, Type: `New` or `Existing` |
-| Requested amount | Requested amount, Amount, Loan amount: `1000000`, `1,000,000` or `RWF 1 000 000` |
+| Customer type | Customer type, Type, TYPE of customer: `New` or `Existing` |
+| Requested amount | Requested amount, Amount, Loan amount, Loan amount requested: `1000000`, `1,000,000` or `RWF 1 000 000` |
 | Provider *(optional)* | Provider, Statement provider: `MTN MoMo` or `Bank of Kigali`. Empty means detect. |
 
 Links can be pasted URLs, hyperlinked text, `=HYPERLINK(...)` or Drive smart
-chips. Only Google Drive file links are used. If a smart chip shows
-*"Not a Google Drive file link"* or *"No CRB link"*, paste the plain URL.
+chips (read through the Sheets API). Only Google Drive file links are used.
+*"No CRB link in F5 (it shows "…")"* means the cell has text but no link the
+script can see: paste the plain Drive URL.
 
-On first run the script adds **Ledger status**, **Ledger result**,
-**Ledger assessed at** and **Ledger report** after your last column. A row
-is pending while Ledger status is empty, so clear it to run that row again.
-Rows with a problem (a missing link, an unreadable amount) are marked
-**Error** with the reason and are not retried until you clear the status.
+On first run the script adds **Ledger assessment** and **Ledger report**
+after your last column. A row is pending while Ledger assessment is empty
+**and** the decision status is empty, so rows already signed off are never
+re-run by *Assess all pending rows*. To run a row again, select it and use
+*Assess selected rows*, or clear both cells. Rows with a problem (a missing
+link, an unreadable amount) get `Error: <reason>` and are not retried until
+you clear Ledger assessment. Columns an older version of the script added
+(*Ledger status*, *Ledger result*, *Ledger assessed at*) are no longer used
+and can be deleted.
 
 ## Setup
 
@@ -144,7 +166,7 @@ Sheets export already writes to. The person who authorises the script needs
 ## Use
 
 - **Ledger → Assess selected rows**: select any cells in the rows you want.
-- **Ledger → Assess all pending rows**: every row with an empty status.
+- **Ledger → Assess all pending rows**: every row with an empty Ledger assessment and decision status.
 - **Ledger → Turn on automatic runs**: pending rows every 10 minutes, with
   nobody clicking.
 
