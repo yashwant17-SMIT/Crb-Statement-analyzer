@@ -417,6 +417,15 @@ def _bureau(lay: Layout, crb: dict) -> None:
         ("Maximum report age (days)", g.get("max_report_age_days")),
     ])
 
+    dev = g.get("deviation")
+    if dev:
+        lay.section("Deviation points (band below the minimum)")
+        lay.pairs([("Overall", _human(dev.get("result")))])
+        lay.table(["Point", "Result", "Summary", "Loans behind the result"],
+                  ([f"{c['code']} {c['title']}", _human(c["result"]), c["summary"],
+                    "\n".join(f["text"] for f in c["findings"] if f["result"] != "allowed")]
+                   for c in dev.get("checks") or []))
+
     lay.section("What the applicant already owes")
     lay.pairs([
         ("Active loans (open, performing)", e.get("ongoing_loan_count")),

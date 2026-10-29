@@ -56,14 +56,14 @@ def account(**kw) -> CreditAccount:
     ("EE", False), ("FF", False), ("GG", False),
     ("HH", False), ("II", False), ("JJ", False),
 ])
-def test_gate_admits_dd_and_above_only(band, allowed):
-    r = assess_credit_report(make_report(band=band), Policy())
+def test_band_only_gate_admits_dd_and_above_only(band, allowed):
+    r = assess_credit_report(make_report(band=band), Policy(deviation_enabled=False))
     assert r["gate"]["statement_parsing_allowed"] is allowed
     assert r["gate"]["decision"] == ("proceed" if allowed else "decline")
 
 
 def test_gate_minimum_is_configurable():
-    strict = Policy(); strict.min_band = "BB"
+    strict = Policy(deviation_enabled=False); strict.min_band = "BB"
     assert assess_credit_report(make_report(band="BB"), strict)["gate"]["statement_parsing_allowed"]
     assert not assess_credit_report(make_report(band="CC"), strict)["gate"]["statement_parsing_allowed"]
 
@@ -561,6 +561,88 @@ def test_non_performing_emi_is_excluded_from_the_headline_and_from_the_row_total
     assert e["scheduled_monthly_payments"] == 71_067
 
 
+# ------------------------------------------------- deviation points D1-D6 --
+def _gate(band="GG", **acct):
+    accounts = [account(**acct)] if acct else []
+    return assess_credit_report(make_report(band=band, accounts=accounts), Policy())
+
+
+def _points(r) -> dict:
+    return {c["code"]: c["result"] for c in r["gate"]["deviation"]["checks"]}
+
+
+@pytest.mark.parametrize("band", ["EE", "FF", "GG", "HH", "II", "JJ"])
+def test_clean_file_below_the_minimum_proceeds_on_the_deviation_points(band):
+    r = _gate(band)
+    g = r["gate"]
+    assert g["statement_parsing_allowed"] is True and g["decision"] == "proceed"
+    assert g["recommendation"] == "proceed"
+    assert set(_points(r).values()) == {"allowed"}
+
+
+def test_band_at_or_above_the_minimum_does_not_run_the_deviation_points():
+    assert "deviation" not in _gate("DD")["gate"]
+
+
+def test_deviation_lowest_band_limits_who_gets_the_points():
+    p = Policy(deviation_lowest_band="GG")
+    assert assess_credit_report(make_report(band="GG"), p)["gate"]["statement_parsing_allowed"] is True
+    g = assess_credit_report(make_report(band="HH"), p)["gate"]
+    assert g["statement_parsing_allowed"] is False and "deviation" not in g
+
+
+def test_d2_open_npa_owing_declines():
+    r = _gate(classification="LOSS", is_non_performing=True, listing_date="01-Mar-2024",
+              balance_amount=10_000, arrears_amount=10_000, days_in_arrears=200)
+    assert r["gate"]["decision"] == "decline" and _points(r)["D2"] == "reject"
+    assert "D2 Open NPA" in r["gate"]["reason"]
+
+
+def test_d4_any_write_off_declines_even_before_the_cutoff():
+    r = _gate(is_open=False, account_status="WRITTEN OFF", listing_date="01-Mar-2019", balance_amount=0)
+    assert r["gate"]["decision"] == "decline" and _points(r)["D4"] == "reject"
+
+
+@pytest.mark.parametrize("listed,last,principal,result", [
+    ("01-Jan-2021", "01-Dec-2022", 900_000, "allowed"),   # matured and cleared before Jan 2024
+    ("01-Jan-2023", "01-Oct-2024", 50_000, "refer"),      # cleared after, loan at the limit
+    ("01-Jan-2023", "01-Oct-2024", 50_001, "reject"),     # cleared after, loan above it
+    ("01-Jan-2021", None, 900_000, "review"),             # matured before, no clearance date
+])
+def test_d5_closed_npa(listed, last, principal, result):
+    r = _gate(is_open=False, classification="LOSS", is_non_performing=True, listing_date=listed,
+              last_payment_date=last, repayment_terms="12 MONTHLY", repayment_term_months=12,
+              principal_amount=principal, balance_amount=0, arrears_amount=0)
+    assert _points(r)["D5"] == result
+
+
+@pytest.mark.parametrize("dpd,arrears,result", [
+    (15, 150_000, "allowed"), (16, 100_000, "refer"), (90, 100_000, "refer"),
+    (16, 100_001, "reject"), (91, 1_000, "reject"), (0, 150_001, "reject"),
+])
+def test_d6_open_performing_loans(dpd, arrears, result):
+    r = _gate(listing_date="01-Mar-2025", days_in_arrears=dpd, days_in_arrears_reported=True,
+              arrears_amount=arrears)
+    assert _points(r)["D6"] == result
+
+
+def test_refer_assesses_the_statement_but_holds_for_the_credit_head():
+    r = _gate(listing_date="01-Mar-2025", days_in_arrears=40, days_in_arrears_reported=True,
+              arrears_amount=60_000)
+    g = r["gate"]
+    assert g["statement_parsing_allowed"] is True and g["decision"] == "refer"
+    assert g["recommendation"] == "refer"
+    assert r["findings"][0]["code"] == "DEVIATION_REFER" and r["findings"][0]["severity"] == "blocking"
+
+
+def test_deviation_limits_are_configurable():
+    p = Policy(deviation_d6_refer_max_arrears=50_000)
+    r = assess_credit_report(make_report(band="GG", accounts=[account(
+        listing_date="01-Mar-2025", days_in_arrears=40, days_in_arrears_reported=True,
+        arrears_amount=60_000)]), p)
+    assert r["gate"]["decision"] == "decline"
+
+
 # ------------------------------------------------------- report freshness --
 def test_stale_report_closes_the_gate():
     r = assess_credit_report(make_report(band="AA", report_date=_report_date(16)), Policy())
@@ -584,10 +666,18 @@ def test_unreadable_report_date_refers_even_on_a_clearing_band():
 
 
 def test_stale_report_reason_is_appended_not_lost_when_band_already_declines():
-    r = assess_credit_report(make_report(band="JJ", report_date=_report_date(30)), Policy())
+    r = assess_credit_report(make_report(band="JJ", report_date=_report_date(30)),
+                             Policy(deviation_enabled=False))
     assert r["gate"]["statement_parsing_allowed"] is False
     assert r["gate"]["decision"] == "decline"
     assert "Additionally" in r["gate"]["reason"]
+
+
+def test_stale_report_declines_a_band_that_passes_the_deviation_points():
+    r = assess_credit_report(make_report(band="JJ", report_date=_report_date(30)), Policy())
+    assert r["gate"]["statement_parsing_allowed"] is False
+    assert r["gate"]["decision"] == "decline"
+    assert "generated 30 days ago" in r["gate"]["reason"]
 
 
 def test_freshness_limit_is_configurable():

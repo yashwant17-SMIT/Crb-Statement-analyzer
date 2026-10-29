@@ -148,6 +148,19 @@ class Policy:
     # by absence of proof.
     crb_history_cutoff: str = "2024-01-01"
 
+    # Deviation points D1-D6 for bands below min_band (see app/deviation.py).
+    # An applicant from the band below min_band down to deviation_lowest_band
+    # proceeds when every point is Allowed; a Refer is assessed in full and
+    # held for the credit head; anything beyond Refer is declined. Set
+    # deviation_enabled False to go back to a band-only gate.
+    deviation_enabled: bool = True
+    deviation_lowest_band: str = "JJ"
+    deviation_d5_refer_max_principal: int = 50_000  # closed NPA cleared after the cutoff (loan size)
+    deviation_d6_allowed_max_dpd: int = 15           # open performing loan: Allowed up to ...
+    deviation_d6_allowed_max_arrears: int = 150_000  # ... these days past due and arrears
+    deviation_d6_refer_max_dpd: int = 90             # Refer up to ...
+    deviation_d6_refer_max_arrears: int = 100_000    # ... these; beyond is Reject
+
     # Advisory thresholds. These do NOT open or close the gate - they raise
     # findings, and a blocking finding means a credit officer must decide.
     max_days_in_arrears: int = 30      # any open account at/above this is blocking
@@ -329,6 +342,13 @@ class Policy:
                 f"Use one of: {', '.join(BAND_LADDER)}."
             )
         self.min_band = band
+        lowest = (self.deviation_lowest_band or "").strip().upper()
+        if lowest not in BAND_LADDER:
+            raise ValueError(
+                f"deviation_lowest_band={self.deviation_lowest_band!r} is not a valid band. "
+                f"Use one of: {', '.join(BAND_LADDER)}."
+            )
+        self.deviation_lowest_band = lowest
 
         from datetime import datetime as _dt
         try:
@@ -344,6 +364,13 @@ class Policy:
             "min_band": self.min_band,
             "crb_max_age_days": self.crb_max_age_days,
             "crb_history_cutoff": self.crb_history_cutoff,
+            "deviation_enabled": self.deviation_enabled,
+            "deviation_lowest_band": self.deviation_lowest_band,
+            "deviation_d5_refer_max_principal": self.deviation_d5_refer_max_principal,
+            "deviation_d6_allowed_max_dpd": self.deviation_d6_allowed_max_dpd,
+            "deviation_d6_allowed_max_arrears": self.deviation_d6_allowed_max_arrears,
+            "deviation_d6_refer_max_dpd": self.deviation_d6_refer_max_dpd,
+            "deviation_d6_refer_max_arrears": self.deviation_d6_refer_max_arrears,
             "statement_period_target_days": self.statement_period_target_days,
             "statement_period_tolerance_days": self.statement_period_tolerance_days,
             "statement_max_age_days": self.statement_max_age_days,

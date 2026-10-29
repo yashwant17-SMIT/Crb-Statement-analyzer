@@ -24,6 +24,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from . import deviation
 from .config import Policy
 from .crb_parser import (
     BAND_SCORE_FLOORS,
@@ -141,6 +142,29 @@ def _finding(code, title, severity, detail, evidence=None) -> Dict[str, Any]:
     }
 
 
+def _deviation_gate(band: str, dev: Dict[str, Any], policy: Policy) -> Dict[str, Any]:
+    """The gate for a band below the minimum, from the deviation points D1-D6.
+
+    All Allowed opens the gate. A Refer or Review also opens it, so the
+    statement is assessed and the sanction known, but the recommendation is
+    refer (a blocking finding is raised below). A Reject closes it.
+    """
+    below = f"Band {band} is below the minimum of {policy.min_band}"
+    if dev["result"] == deviation.ALLOWED:
+        gate = {"statement_parsing_allowed": True, "decision": "proceed",
+                "reason": f"{below}, but every deviation point (D1-D6) is within its Allowed limit."}
+    elif dev["result"] in (deviation.REFER, deviation.REVIEW):
+        gate = {"statement_parsing_allowed": True, "decision": "refer",
+                "reason": f"{below}. No deviation point is a Reject, but the credit head must "
+                          f"approve: {dev['detail']}"}
+    else:
+        gate = {"statement_parsing_allowed": False, "decision": "decline",
+                "reason": f"{below}, and fails the deviation points: {dev['detail']} "
+                          "The statement is not assessed."}
+    gate["deviation"] = dev
+    return gate
+
+
 def assess_credit_report(report: ParsedCreditReport, policy: Policy) -> Dict[str, Any]:
     band = report.band
     rank, floor = _rank(band), _rank(policy.min_band)
@@ -160,6 +184,9 @@ def assess_credit_report(report: ParsedCreditReport, policy: Policy) -> Dict[str
             "decision": "proceed",
             "reason": f"Band {band} meets the minimum of {policy.min_band}.",
         }
+    elif policy.deviation_enabled and rank <= _rank(policy.deviation_lowest_band):
+        gate = _deviation_gate(band, deviation.assess(report, policy, _adverse_records(report, policy)),
+                               policy)
     else:
         gate = {
             "statement_parsing_allowed": False,
@@ -417,6 +444,12 @@ def assess_credit_report(report: ParsedCreditReport, policy: Policy) -> Dict[str
     }
 
     findings = _findings(report, policy, open_accounts, exposure, gate)
+    dev = gate.get("deviation")
+    if gate["statement_parsing_allowed"] and dev and dev["result"] != deviation.ALLOWED:
+        findings.insert(0, _finding(
+            "DEVIATION_REFER",
+            f"Band {band} deviation: refer to the credit head",
+            "blocking", dev["detail"], {"deviation": dev["checks"]}))
 
     blocking = [f for f in findings if f["severity"] == "blocking"]
     if gate["statement_parsing_allowed"] and blocking:
@@ -927,11 +960,23 @@ def _enquiry_profile(report) -> Dict[str, Any]:
     }
 
 
+def _gate_note(policy: Policy) -> str:
+    floor = BAND_LADDER.index(policy.min_band)
+    above, below = BAND_LADDER[:floor + 1], BAND_LADDER[floor + 1:]
+    if not policy.deviation_enabled or not below:
+        return (f"The gate is band-only: {', '.join(above)} proceed to statement parsing"
+                + (f", {', '.join(below)} do not." if below else "."))
+    lowest = BAND_LADDER.index(policy.deviation_lowest_band)
+    dev, never = below[:max(0, lowest - floor)], BAND_LADDER[max(lowest, floor) + 1:]
+    return (f"{', '.join(above)} proceed to statement parsing. "
+            + (f"{', '.join(dev)} proceed only when every deviation point (D1-D6) is Allowed; a "
+               "Refer is assessed and held for the credit head, a Reject is declined. " if dev else "")
+            + (f"{', '.join(never)} do not proceed." if never else "")).strip()
+
+
 def _notes(report, policy) -> List[str]:
     notes = [
-        f"The gate is band-only: {', '.join(BAND_LADDER[:BAND_LADDER.index(policy.min_band) + 1])} "
-        f"proceed to statement parsing, "
-        f"{', '.join(BAND_LADDER[BAND_LADDER.index(policy.min_band) + 1:])} do not.",
+        _gate_note(policy),
         "Account Status of CURRENT is a billing state, not a health indicator. "
         "Days in arrears and classification are used instead.",
         "Monthly EMI uses bureau Scheduled Payments where reported. When Scheduled Payments "
