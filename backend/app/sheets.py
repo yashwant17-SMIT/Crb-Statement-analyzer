@@ -416,14 +416,16 @@ def _bureau(lay: Layout, crb: dict) -> None:
         ("Report age (days)", g.get("report_age_days")),
         ("Maximum report age (days)", g.get("max_report_age_days")),
     ])
+    lay.note(g.get("note"))
 
     dev = g.get("deviation")
     if dev:
-        lay.section("Deviation points (band below the minimum)")
+        lay.section("CRB deviation points (D1-D5)")
         lay.pairs([("Overall", _human(dev.get("result")))])
         lay.table(["Point", "Result", "Summary", "Loans behind the result"],
                   ([f"{c['code']} {c['title']}", _human(c["result"]), c["summary"],
-                    "\n".join(f["text"] for f in c["findings"] if f["result"] != "allowed")]
+                    "\n".join("\n  ".join([f["text"]] + (f.get("details") or []))
+                              for f in c["findings"] if f["result"] != "allowed")]
                    for c in dev.get("checks") or []))
 
     lay.section("What the applicant already owes")

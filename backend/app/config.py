@@ -148,18 +148,26 @@ class Policy:
     # by absence of proof.
     crb_history_cutoff: str = "2024-01-01"
 
-    # Deviation points D1-D6 for bands below min_band (see app/deviation.py).
-    # An applicant from the band below min_band down to deviation_lowest_band
-    # proceeds when every point is Allowed; a Refer is assessed in full and
-    # held for the credit head; anything beyond Refer is declined. Set
-    # deviation_enabled False to go back to a band-only gate.
+    # Deviation points D1-D5, the first step of the bureau gate (see
+    # app/deviation.py). An applicant from the top band down to
+    # deviation_lowest_band proceeds when every point is Allowed; a Refer is
+    # assessed in full and held for the approving authority; anything beyond
+    # Refer is declined. deviation_all_bands False runs the points only below
+    # min_band (bands at or above it pass on the band alone); deviation_enabled
+    # False goes back to a band-only gate. A report with no loans or no band
+    # passes to statement analysis with a note.
     deviation_enabled: bool = True
+    deviation_all_bands: bool = True
     deviation_lowest_band: str = "JJ"
-    deviation_d5_refer_max_principal: int = 50_000  # closed NPA cleared after the cutoff (loan size)
-    deviation_d6_allowed_max_dpd: int = 15           # open performing loan: Allowed up to ...
-    deviation_d6_allowed_max_arrears: int = 150_000  # ... these days past due and arrears
-    deviation_d6_refer_max_dpd: int = 90             # Refer up to ...
-    deviation_d6_refer_max_arrears: int = 100_000    # ... these; beyond is Reject
+    deviation_d2_allowed_max_dpd: int = 15            # open performing loan: Allowed up to these days ...
+    deviation_d2_allowed_max_arrears: int = 150_000   # ... with arrears up to this
+    deviation_d2_late_allowed_max_arrears: int = 50_000  # beyond those days up to the Refer days: Allowed up to this
+    deviation_d2_refer_max_dpd: int = 90              # Refer up to these days ...
+    deviation_d2_refer_max_arrears: int = 75_000      # ... and this arrears; beyond is Reject
+    deviation_d3_allowed_max_arrears: int = 75_000    # open NPA (or beyond the Refer days): above is Reject
+    deviation_d4_min_good_loans: int = 10             # write-off before the cutoff: Allowed with this many good loans since
+    deviation_d4_reject_min_arrears: int = 75_000     # write-off since the cutoff: above this arrears is Reject, else Refer
+    deviation_d5_refer_max_principal: int = 100_000   # closed NPA cleared after the cutoff (loan size)
 
     # Advisory thresholds. These do NOT open or close the gate - they raise
     # findings, and a blocking finding means a credit officer must decide.
@@ -365,12 +373,17 @@ class Policy:
             "crb_max_age_days": self.crb_max_age_days,
             "crb_history_cutoff": self.crb_history_cutoff,
             "deviation_enabled": self.deviation_enabled,
+            "deviation_all_bands": self.deviation_all_bands,
             "deviation_lowest_band": self.deviation_lowest_band,
+            "deviation_d2_allowed_max_dpd": self.deviation_d2_allowed_max_dpd,
+            "deviation_d2_allowed_max_arrears": self.deviation_d2_allowed_max_arrears,
+            "deviation_d2_late_allowed_max_arrears": self.deviation_d2_late_allowed_max_arrears,
+            "deviation_d2_refer_max_dpd": self.deviation_d2_refer_max_dpd,
+            "deviation_d2_refer_max_arrears": self.deviation_d2_refer_max_arrears,
+            "deviation_d3_allowed_max_arrears": self.deviation_d3_allowed_max_arrears,
+            "deviation_d4_min_good_loans": self.deviation_d4_min_good_loans,
+            "deviation_d4_reject_min_arrears": self.deviation_d4_reject_min_arrears,
             "deviation_d5_refer_max_principal": self.deviation_d5_refer_max_principal,
-            "deviation_d6_allowed_max_dpd": self.deviation_d6_allowed_max_dpd,
-            "deviation_d6_allowed_max_arrears": self.deviation_d6_allowed_max_arrears,
-            "deviation_d6_refer_max_dpd": self.deviation_d6_refer_max_dpd,
-            "deviation_d6_refer_max_arrears": self.deviation_d6_refer_max_arrears,
             "statement_period_target_days": self.statement_period_target_days,
             "statement_period_tolerance_days": self.statement_period_tolerance_days,
             "statement_max_age_days": self.statement_max_age_days,

@@ -68,8 +68,8 @@ def test_gate_minimum_is_configurable():
     assert not assess_credit_report(make_report(band="CC"), strict)["gate"]["statement_parsing_allowed"]
 
 
-def test_unreadable_band_refers_rather_than_guessing():
-    r = assess_credit_report(make_report(band=None, score=None), Policy())
+def test_unreadable_band_refers_on_the_band_only_gate():
+    r = assess_credit_report(make_report(band=None, score=None), Policy(deviation_enabled=False))
     assert r["gate"]["statement_parsing_allowed"] is False
     assert r["gate"]["decision"] == "refer"
 
@@ -101,7 +101,7 @@ def test_band_falls_back_to_score_when_letters_missing(score, band):
 def test_band_alone_does_not_approve_a_delinquent_file():
     """The whole point of this module: an AA file can still be unlendable."""
     accts = [account(balance_amount=5_370_499, arrears_amount=3_037_167, days_in_arrears=65)]
-    r = assess_credit_report(make_report(band="AA", accounts=accts), Policy())
+    r = assess_credit_report(make_report(band="AA", accounts=accts), Policy(deviation_enabled=False))
     assert r["gate"]["statement_parsing_allowed"] is True      # band opens the gate
     assert r["gate"]["recommendation"] == "refer"              # but do not approve
     codes = {f["code"] for f in r["findings"] if f["severity"] == "blocking"}
@@ -183,7 +183,7 @@ def test_non_performing_accounts_are_not_deducted_but_are_surfaced():
                 balance_amount=530_304, arrears_amount=603_817,
                 repayment_terms="12 MONTHLY", principal_amount=752_000),
     ]
-    r = assess_credit_report(make_report(accounts=accts), Policy())
+    r = assess_credit_report(make_report(accounts=accts), Policy(deviation_enabled=False))
     e = r["exposure"]
     assert e["scheduled_monthly_payments"] == 40_000          # no synthetic 62,667
     assert e["ongoing_loan_count"] == 1                        # active loans, not open accounts
@@ -561,72 +561,153 @@ def test_non_performing_emi_is_excluded_from_the_headline_and_from_the_row_total
     assert e["scheduled_monthly_payments"] == 71_067
 
 
-# ------------------------------------------------- deviation points D1-D6 --
-def _gate(band="GG", **acct):
-    accounts = [account(**acct)] if acct else []
-    return assess_credit_report(make_report(band=band, accounts=accounts), Policy())
+# ------------------------------------------------- deviation points D1-D5 --
+def _gate(band="GG", policy=None, **acct):
+    accounts = [account(**acct)] if acct else [account(listing_date="01-Mar-2025")]
+    return assess_credit_report(make_report(band=band, accounts=accounts), policy or Policy())
 
 
 def _points(r) -> dict:
     return {c["code"]: c["result"] for c in r["gate"]["deviation"]["checks"]}
 
 
-@pytest.mark.parametrize("band", ["EE", "FF", "GG", "HH", "II", "JJ"])
-def test_clean_file_below_the_minimum_proceeds_on_the_deviation_points(band):
+@pytest.mark.parametrize("band", BAND_LADDER)
+def test_clean_file_proceeds_on_the_deviation_points_in_every_band(band):
     r = _gate(band)
     g = r["gate"]
     assert g["statement_parsing_allowed"] is True and g["decision"] == "proceed"
     assert g["recommendation"] == "proceed"
-    assert set(_points(r).values()) == {"allowed"}
+    assert _points(r) == dict.fromkeys(["D1", "D2", "D3", "D4", "D5"], "allowed")
 
 
-def test_band_at_or_above_the_minimum_does_not_run_the_deviation_points():
-    assert "deviation" not in _gate("DD")["gate"]
+def test_a_top_band_is_declined_on_a_deviation_reject():
+    r = _gate("AA", listing_date="01-Mar-2025", days_in_arrears=40, arrears_amount=80_000)
+    assert r["gate"]["decision"] == "decline" and _points(r)["D2"] == "reject"
+
+
+def test_deviation_all_bands_off_lets_bands_at_the_minimum_pass_on_the_band():
+    p = Policy(deviation_all_bands=False)
+    assert "deviation" not in _gate("DD", p)["gate"]
+    assert "deviation" in _gate("EE", p)["gate"]
 
 
 def test_deviation_lowest_band_limits_who_gets_the_points():
     p = Policy(deviation_lowest_band="GG")
-    assert assess_credit_report(make_report(band="GG"), p)["gate"]["statement_parsing_allowed"] is True
-    g = assess_credit_report(make_report(band="HH"), p)["gate"]
+    assert _gate("GG", p)["gate"]["statement_parsing_allowed"] is True
+    g = _gate("HH", p)["gate"]
     assert g["statement_parsing_allowed"] is False and "deviation" not in g
 
 
-def test_d2_open_npa_owing_declines():
-    r = _gate(classification="LOSS", is_non_performing=True, listing_date="01-Mar-2024",
-              balance_amount=10_000, arrears_amount=10_000, days_in_arrears=200)
-    assert r["gate"]["decision"] == "decline" and _points(r)["D2"] == "reject"
-    assert "D2 Open NPA" in r["gate"]["reason"]
+@pytest.mark.parametrize("band", ["AA", "JJ", None])
+def test_no_loan_data_passes_to_the_statement_with_a_note(band):
+    r = assess_credit_report(make_report(band=band, score=None if band is None else 675), Policy())
+    g = r["gate"]
+    assert g["statement_parsing_allowed"] is True and g["decision"] == "proceed"
+    assert "no loan data" in g["note"].lower() and "deviation" not in g
+    assert r["findings"][0]["code"] == "CRB_NOTE"
 
 
-def test_d4_any_write_off_declines_even_before_the_cutoff():
-    r = _gate(is_open=False, account_status="WRITTEN OFF", listing_date="01-Mar-2019", balance_amount=0)
-    assert r["gate"]["decision"] == "decline" and _points(r)["D4"] == "reject"
+def test_no_score_with_loans_is_judged_on_the_points_with_a_note():
+    r = _gate(None, listing_date="01-Mar-2025")
+    g = r["gate"]
+    assert g["decision"] == "proceed" and "no bureau band" in g["note"].lower()
 
 
-@pytest.mark.parametrize("listed,last,principal,result", [
-    ("01-Jan-2021", "01-Dec-2022", 900_000, "allowed"),   # matured and cleared before Jan 2024
-    ("01-Jan-2023", "01-Oct-2024", 50_000, "refer"),      # cleared after, loan at the limit
-    ("01-Jan-2023", "01-Oct-2024", 50_001, "reject"),     # cleared after, loan above it
-    ("01-Jan-2021", None, 900_000, "review"),             # matured before, no clearance date
+@pytest.mark.parametrize("dpd,arrears,result", [
+    (15, 150_000, "allowed"), (0, 150_001, "reject"), (15, 150_001, "reject"),
+    (16, 50_000, "allowed"), (90, 50_000, "allowed"),
+    (16, 50_001, "refer"), (90, 75_000, "refer"),
+    (16, 75_001, "reject"), (90, 75_001, "reject"),
 ])
-def test_d5_closed_npa(listed, last, principal, result):
+def test_d2_open_performing_loans(dpd, arrears, result):
+    r = _gate(listing_date="01-Mar-2025", days_in_arrears=dpd, days_in_arrears_reported=True,
+              arrears_amount=arrears)
+    assert _points(r)["D2"] == result
+
+
+def test_d2_ignores_loans_listed_before_the_cutoff():
+    r = _gate(listing_date="01-Mar-2023", days_in_arrears=40, arrears_amount=900_000)
+    assert _points(r)["D2"] == "allowed"
+
+
+@pytest.mark.parametrize("acct,result", [
+    (dict(classification="LOSS", is_non_performing=True, arrears_amount=75_000, days_in_arrears=200), "allowed"),
+    (dict(classification="LOSS", is_non_performing=True, arrears_amount=75_001, days_in_arrears=200), "reject"),
+    (dict(days_in_arrears=91, arrears_amount=75_001), "reject"),         # past 90 days counts as an NPA
+    (dict(days_in_arrears=91, arrears_amount=1_000), "allowed"),
+])
+def test_d3_open_npa(acct, result):
+    r = _gate(listing_date="01-Mar-2024", **acct)
+    assert _points(r)["D3"] == result
+    assert _points(r)["D2"] == "allowed"
+
+
+def _write_off(listed, arrears, good=0, band="GG"):
+    accts = [account(index=1, account_status="WRITTEN OFF", classification="WRITE OFF",
+                     is_non_performing=True, listing_date=listed, arrears_amount=arrears,
+                     balance_amount=arrears, days_in_arrears=300)]
+    accts += [account(index=i + 2, listing_date="01-Mar-2025") for i in range(good)]
+    return assess_credit_report(make_report(band=band, accounts=accts), Policy())
+
+
+@pytest.mark.parametrize("listed,arrears,good,result", [
+    ("01-Mar-2019", 900_000, 10, "allowed"),  # before the cutoff, 10 good loans since
+    ("01-Mar-2019", 900_000, 9, "reject"),    # before the cutoff, too few
+    ("13-Jun-2025", 75_000, 0, "refer"),      # since the cutoff, within the limit
+    ("13-Jun-2025", 195_615, 0, "reject"),    # since the cutoff, above it (the PDF's example)
+])
+def test_d4_write_off(listed, arrears, good, result):
+    assert _points(_write_off(listed, arrears, good))["D4"] == result
+
+
+def test_write_off_takes_precedence_over_npa():
+    """A written-off NPA is one D4 finding, with its NPA details beneath it."""
+    r = _write_off("13-Jun-2025", 195_615)
+    pts = _points(r)
+    assert pts["D3"] == "allowed" and pts["D5"] == "allowed" and pts["D4"] == "reject"
+    d4 = next(c for c in r["gate"]["deviation"]["checks"] if c["code"] == "D4")
+    assert d4["findings"][0]["details"][0].startswith("Also an open NPA")
+    assert r["gate"]["reason"].count("Account #1") == 1
+
+
+def test_write_off_is_one_finding_not_one_per_topic():
+    r = _write_off("13-Jun-2025", 195_615)
+    codes = [f["code"] for f in r["findings"]]
+    assert "WRITE_OFF" in codes
+    assert not {"NPA", "UNSERVICED_OBLIGATION", "ARREARS", "ADVERSE_CLASSIFICATION"} & set(codes)
+    wo = next(f for f in r["findings"] if f["code"] == "WRITE_OFF")
+    assert wo["evidence"]["accounts"][0]["index"] == 1 and wo["evidence"]["accounts"][0]["npa"]
+
+
+def test_write_off_leaves_other_accounts_in_their_findings():
+    accts = [account(index=1, account_status="WRITTEN OFF", classification="WRITE OFF",
+                     is_non_performing=True, listing_date="13-Jun-2025", arrears_amount=50_000),
+             account(index=2, classification="LOSS", is_non_performing=True,
+                     listing_date="01-Mar-2025", arrears_amount=10_000, days_in_arrears=200)]
+    r = assess_credit_report(make_report(band="GG", accounts=accts), Policy())
+    npa = next(f for f in r["findings"] if f["code"] == "NPA")
+    assert [a["index"] for a in npa["evidence"]["accounts"]] == [2]
+
+
+@pytest.mark.parametrize("listed,last,terms,principal,result", [
+    ("01-Jan-2021", "01-Dec-2022", 12, 900_000, "allowed"),  # matured and cleared before Jan 2024
+    ("01-Jan-2023", "01-Oct-2024", 12, 100_000, "refer"),    # cleared after, loan at the limit
+    ("01-Jan-2023", "01-Oct-2024", 12, 100_001, "reject"),   # cleared after, loan above it
+    ("01-Jan-2023", "01-Jun-2023", 24, 900_000, "allowed"),  # cleared early, term ran past the cutoff
+    ("01-Jan-2021", "01-Jun-2022", None, 900_000, "allowed"),  # cleared before, term unknown
+    ("01-Mar-2024", None, None, 100_001, "reject"),          # no payment date, listed since the cutoff
+    ("01-Jan-2021", None, 12, 900_000, "allowed"),           # no payment date, term ended 2022
+    ("01-Jan-2023", None, 24, 50_000, "refer"),              # no payment date, term ran to 2025
+    ("01-Jan-2021", None, None, 900_000, "review"),          # nothing to date the clearance by
+])
+def test_d5_closed_npa(listed, last, terms, principal, result):
     r = _gate(is_open=False, classification="LOSS", is_non_performing=True, listing_date=listed,
-              last_payment_date=last, repayment_terms="12 MONTHLY", repayment_term_months=12,
+              last_payment_date=last, repayment_terms=terms and f"{terms} MONTHLY", repayment_term_months=terms,
               principal_amount=principal, balance_amount=0, arrears_amount=0)
     assert _points(r)["D5"] == result
 
 
-@pytest.mark.parametrize("dpd,arrears,result", [
-    (15, 150_000, "allowed"), (16, 100_000, "refer"), (90, 100_000, "refer"),
-    (16, 100_001, "reject"), (91, 1_000, "reject"), (0, 150_001, "reject"),
-])
-def test_d6_open_performing_loans(dpd, arrears, result):
-    r = _gate(listing_date="01-Mar-2025", days_in_arrears=dpd, days_in_arrears_reported=True,
-              arrears_amount=arrears)
-    assert _points(r)["D6"] == result
-
-
-def test_refer_assesses_the_statement_but_holds_for_the_credit_head():
+def test_refer_assesses_the_statement_but_holds_for_the_approving_authority():
     r = _gate(listing_date="01-Mar-2025", days_in_arrears=40, days_in_arrears_reported=True,
               arrears_amount=60_000)
     g = r["gate"]
@@ -635,11 +716,19 @@ def test_refer_assesses_the_statement_but_holds_for_the_credit_head():
     assert r["findings"][0]["code"] == "DEVIATION_REFER" and r["findings"][0]["severity"] == "blocking"
 
 
+def test_findings_the_points_rule_on_do_not_hold_an_allowed_file():
+    r = _gate("AA", listing_date="01-Mar-2025", days_in_arrears=40, days_in_arrears_reported=True,
+              arrears_amount=40_000)
+    assert _points(r)["D2"] == "allowed"
+    assert r["gate"]["recommendation"] == "proceed"
+    late = next(f for f in r["findings"] if f["code"] == "DELINQUENT")
+    assert late["severity"] == "warning" and "D2/D3" in late["detail"]
+
+
 def test_deviation_limits_are_configurable():
-    p = Policy(deviation_d6_refer_max_arrears=50_000)
-    r = assess_credit_report(make_report(band="GG", accounts=[account(
-        listing_date="01-Mar-2025", days_in_arrears=40, days_in_arrears_reported=True,
-        arrears_amount=60_000)]), p)
+    p = Policy(deviation_d2_refer_max_arrears=55_000)
+    r = _gate(policy=p, listing_date="01-Mar-2025", days_in_arrears=40, days_in_arrears_reported=True,
+              arrears_amount=60_000)
     assert r["gate"]["decision"] == "decline"
 
 
@@ -701,7 +790,7 @@ def test_npa_before_the_cutoff_does_not_block():
 def test_npa_on_or_after_the_cutoff_still_blocks():
     recent = account(index=1, classification="LOSS", is_non_performing=True,
                      listing_date="15-Jun-2024", balance_amount=500_000)
-    r = assess_credit_report(make_report(band="AA", accounts=[recent]), Policy())
+    r = assess_credit_report(make_report(band="AA", accounts=[recent]), Policy(deviation_enabled=False))
     codes = {f["code"] for f in r["findings"] if f["severity"] == "blocking"}
     assert "NPA" in codes
 
@@ -709,7 +798,7 @@ def test_npa_on_or_after_the_cutoff_still_blocks():
 def test_npa_with_unreadable_listing_date_is_not_suppressed():
     unknown = account(index=1, classification="LOSS", is_non_performing=True,
                       listing_date=None, balance_amount=500_000)
-    r = assess_credit_report(make_report(band="AA", accounts=[unknown]), Policy())
+    r = assess_credit_report(make_report(band="AA", accounts=[unknown]), Policy(deviation_enabled=False))
     codes = {f["code"] for f in r["findings"] if f["severity"] == "blocking"}
     assert "NPA" in codes
 
@@ -803,7 +892,7 @@ def test_pre_cutoff_non_performing_account_raises_no_blocking_finding():
 def test_post_cutoff_non_performing_account_still_blocks():
     npa = account(classification="DOUBTFUL", is_non_performing=True, listing_date="06-Mar-2025",
                   balance_amount=530_000, arrears_amount=900_000)
-    out = assess_credit_report(make_report(band="AA", accounts=[npa]), Policy())
+    out = assess_credit_report(make_report(band="AA", accounts=[npa]), Policy(deviation_enabled=False))
     codes = {f["code"] for f in out["findings"] if f["severity"] == "blocking"}
     assert {"NPA", "UNSERVICED_OBLIGATION", "SCORE_DIVERGENCE"} <= codes
 
@@ -813,3 +902,12 @@ def test_pre_cutoff_performing_account_classification_still_warns():
     watch = account(classification="WATCH", listing_date="15-Jun-2022")
     out = assess_credit_report(make_report(band="AA", accounts=[watch]), Policy())
     assert "ADVERSE_CLASSIFICATION" in {f["code"] for f in out["findings"]}
+
+
+def test_no_hit_summary_is_recognised_but_an_unread_summary_is_not():
+    from app.crb_parser import _no_hit
+    zero = {"your_sector": 0, "other_sectors": 0}
+    assert _no_hit({"performing_accounts": zero, "non-performing_accounts": zero})
+    assert not _no_hit({"performing_accounts": zero})
+    assert not _no_hit({"performing_accounts": zero,
+                        "non-performing_accounts": {"your_sector": 0, "other_sectors": 1}})

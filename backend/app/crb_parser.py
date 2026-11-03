@@ -502,6 +502,16 @@ def _parse_enquiries(text: str) -> List[Dict[str, str]]:
 
 
 # ------------------------------------------------------------------ main ---
+def _no_hit(summary: Dict[str, Dict[str, Optional[float]]]) -> bool:
+    """The bureau's own summary says there are no accounts at all (a no-hit file).
+
+    Both account rows must have been read and be zero in both columns, so a
+    layout the summary parser can't read is still an error, not a clean file.
+    """
+    rows = [summary.get(k) or {} for k in ("performing_accounts", "non-performing_accounts")]
+    return all(r.get(c) == 0 for r in rows for c in ("your_sector", "other_sectors"))
+
+
 def parse_credit_report(data: bytes) -> ParsedCreditReport:
     try:
         pdf = pdfplumber.open(io.BytesIO(data))
@@ -540,7 +550,8 @@ def parse_credit_report(data: bytes) -> ParsedCreditReport:
 
     collaterals, dupes = _parse_collaterals(text)
     accounts, skipped_blocks = _parse_accounts(text)
-    if not accounts:
+    summary = _parse_summary(text)
+    if not accounts and not _no_hit(summary):
         raise CreditReportParseError(
             "No credit accounts found. The report may be a scanned image or an "
             "unsupported bureau format."
@@ -556,7 +567,7 @@ def parse_credit_report(data: bytes) -> ParsedCreditReport:
         band=band,
         probability_of_default=float(pod) if pod else None,
         adverse_action_reasons=reasons,
-        summary=_parse_summary(text),
+        summary=summary,
         accounts=accounts,
         collaterals=collaterals,
         collateral_duplicates_removed=dupes,

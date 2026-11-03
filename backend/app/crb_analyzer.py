@@ -142,27 +142,78 @@ def _finding(code, title, severity, detail, evidence=None) -> Dict[str, Any]:
     }
 
 
-def _deviation_gate(band: str, dev: Dict[str, Any], policy: Policy) -> Dict[str, Any]:
-    """The gate for a band below the minimum, from the deviation points D1-D6.
+# Findings the deviation points rule on, and the point that does.
+DEVIATION_COVERED = {"NPA": "D3/D5", "ARREARS": "D2/D3", "DELINQUENT": "D2/D3",
+                     "UNSERVICED_OBLIGATION": "D3/D4", "SCORE_DIVERGENCE": "D2/D3"}
+
+
+# Account-level findings a written-off loan would otherwise repeat under.
+WRITE_OFF_FOLDED = {"NPA", "NPA_PRE_CUTOFF", "UNSERVICED_OBLIGATION", "UNSERVICED_OBLIGATION_PRE_CUTOFF",
+                    "ARREARS", "ARREARS_PRE_CUTOFF", "DELINQUENT", "DETERIORATING",
+                    "ADVERSE_CLASSIFICATION"}
+
+
+def _fold_write_offs(findings: List[Dict[str, Any]], report: ParsedCreditReport,
+                     dev: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """One Write-off finding per file instead of the same loan under several.
+
+    Credit policy: a loan that is both an NPA and written off is a write-off.
+    Its accounts leave the other account findings (a finding left with no
+    current account is dropped) and are listed once under WRITE_OFF, with the NPA details beneath.
+    """
+    written_off = {a.index for a in report.accounts if deviation.is_write_off(a)}
+    if not written_off:
+        return findings
+    out = []
+    for f in findings:
+        ev = f["evidence"]
+        if f["code"] in WRITE_OFF_FOLDED and isinstance(ev, dict):
+            lists = {k: v for k, v in ev.items() if k in ("accounts", "excluded_pre_cutoff") and v}
+            kept = {k: [x for x in v if not (isinstance(x, dict) and x.get("index") in written_off)]
+                    for k, v in lists.items()}
+            if lists.get("accounts") and not kept["accounts"]:
+                continue
+            if kept != lists:
+                ev.update({k: v or None for k, v in kept.items()})
+                f["detail"] += " Written-off accounts are listed under Written-off loans instead."
+        out.append(f)
+    d4 = next(c for c in dev["checks"] if c["code"] == "D4")
+    out.insert(0, _finding("WRITE_OFF", "Written-off loans", "warning",
+                           f"{d4['summary']} Ruled on by deviation point D4.",
+                           {"accounts": [{"index": x["account"], "result": x["result"], "detail": x["text"],
+                                          "npa": x["details"] or None} for x in d4["findings"]]}))
+    return out
+
+
+def _deviation_gate(lead: str, dev: Dict[str, Any]) -> Dict[str, Any]:
+    """The gate from the deviation points D1-D5.
 
     All Allowed opens the gate. A Refer or Review also opens it, so the
     statement is assessed and the sanction known, but the recommendation is
     refer (a blocking finding is raised below). A Reject closes it.
     """
-    below = f"Band {band} is below the minimum of {policy.min_band}"
     if dev["result"] == deviation.ALLOWED:
         gate = {"statement_parsing_allowed": True, "decision": "proceed",
-                "reason": f"{below}, but every deviation point (D1-D6) is within its Allowed limit."}
+                "reason": f"{lead}; every deviation point (D1-D5) is within its Allowed limit."}
     elif dev["result"] in (deviation.REFER, deviation.REVIEW):
         gate = {"statement_parsing_allowed": True, "decision": "refer",
-                "reason": f"{below}. No deviation point is a Reject, but the credit head must "
+                "reason": f"{lead}. No deviation point is a Reject, but the approving authority must "
                           f"approve: {dev['detail']}"}
     else:
         gate = {"statement_parsing_allowed": False, "decision": "decline",
-                "reason": f"{below}, and fails the deviation points: {dev['detail']} "
+                "reason": f"{lead}, and fails the deviation points: {dev['detail']} "
                           "The statement is not assessed."}
     gate["deviation"] = dev
     return gate
+
+
+def _runs_deviation(rank: Optional[int], floor: int, policy: Policy) -> bool:
+    """Whether the deviation points decide the gate for this band."""
+    if not policy.deviation_enabled:
+        return False
+    if rank is None:
+        return True
+    return rank <= _rank(policy.deviation_lowest_band) and (policy.deviation_all_bands or rank > floor)
 
 
 def assess_credit_report(report: ParsedCreditReport, policy: Policy) -> Dict[str, Any]:
@@ -171,7 +222,28 @@ def assess_credit_report(report: ParsedCreditReport, policy: Policy) -> Dict[str
     open_accounts = [a for a in report.accounts if a.is_open]
 
     # ---------------------------------------------------------- the gate --
-    if rank is None:
+    # Credit policy approves a file with no loans or no score whatever the
+    # band: there is nothing for the points to judge, so it goes on to the
+    # statement, with a note saying why.
+    no_band = "No bureau band or score could be read from the report"
+    if policy.deviation_enabled and not report.accounts:
+        gate = {
+            "statement_parsing_allowed": True,
+            "decision": "proceed",
+            "reason": f"{no_band + ' and' if rank is None else f'Band {band}:'} no loans on the "
+                      "bureau file. Credit policy passes a file with no loan data to statement "
+                      "analysis whatever the band.",
+            "note": "No loan data on the bureau file; passed to statement analysis without the CRB checks.",
+        }
+    elif _runs_deviation(rank, floor, policy):
+        lead = no_band if rank is None else (
+            f"Band {band} meets the minimum of {policy.min_band}" if rank <= floor
+            else f"Band {band} is below the minimum of {policy.min_band}")
+        gate = _deviation_gate(lead, deviation.assess(report, policy, _adverse_records(report, policy)))
+        if rank is None:
+            gate["note"] = ("No bureau band or score; credit policy passes it to statement analysis "
+                            "on the deviation points alone.")
+    elif rank is None:
         gate = {
             "statement_parsing_allowed": False,
             "decision": "refer",
@@ -184,9 +256,6 @@ def assess_credit_report(report: ParsedCreditReport, policy: Policy) -> Dict[str
             "decision": "proceed",
             "reason": f"Band {band} meets the minimum of {policy.min_band}.",
         }
-    elif policy.deviation_enabled and rank <= _rank(policy.deviation_lowest_band):
-        gate = _deviation_gate(band, deviation.assess(report, policy, _adverse_records(report, policy)),
-                               policy)
     else:
         gate = {
             "statement_parsing_allowed": False,
@@ -445,11 +514,22 @@ def assess_credit_report(report: ParsedCreditReport, policy: Policy) -> Dict[str
 
     findings = _findings(report, policy, open_accounts, exposure, gate)
     dev = gate.get("deviation")
+    if dev:
+        # The points have already ruled on these; they stay on the report but
+        # no longer hold an application the points let through.
+        for f in findings:
+            if f["code"] in DEVIATION_COVERED and f["severity"] == "blocking":
+                f["severity"] = "warning"
+                f["detail"] += f" Ruled on by deviation point {DEVIATION_COVERED[f['code']]}."
+        findings = _fold_write_offs(findings, report, dev)
     if gate["statement_parsing_allowed"] and dev and dev["result"] != deviation.ALLOWED:
         findings.insert(0, _finding(
             "DEVIATION_REFER",
-            f"Band {band} deviation: refer to the credit head",
+            f"Band {band or 'unknown'} deviation: refer to the approving authority",
             "blocking", dev["detail"], {"deviation": dev["checks"]}))
+    if gate.get("note"):
+        findings.insert(0, _finding("CRB_NOTE", "Passed to statement analysis", "informational",
+                                    gate["note"]))
 
     blocking = [f for f in findings if f["severity"] == "blocking"]
     if gate["statement_parsing_allowed"] and blocking:
@@ -963,15 +1043,19 @@ def _enquiry_profile(report) -> Dict[str, Any]:
 def _gate_note(policy: Policy) -> str:
     floor = BAND_LADDER.index(policy.min_band)
     above, below = BAND_LADDER[:floor + 1], BAND_LADDER[floor + 1:]
-    if not policy.deviation_enabled or not below:
+    if not policy.deviation_enabled or not below and not policy.deviation_all_bands:
         return (f"The gate is band-only: {', '.join(above)} proceed to statement parsing"
                 + (f", {', '.join(below)} do not." if below else "."))
     lowest = BAND_LADDER.index(policy.deviation_lowest_band)
-    dev, never = below[:max(0, lowest - floor)], BAND_LADDER[max(lowest, floor) + 1:]
-    return (f"{', '.join(above)} proceed to statement parsing. "
-            + (f"{', '.join(dev)} proceed only when every deviation point (D1-D6) is Allowed; a "
-               "Refer is assessed and held for the credit head, a Reject is declined. " if dev else "")
-            + (f"{', '.join(never)} do not proceed." if never else "")).strip()
+    first = 0 if policy.deviation_all_bands else floor + 1
+    dev, never = BAND_LADDER[first:lowest + 1], BAND_LADDER[max(lowest, floor) + 1:]
+    passed = [] if policy.deviation_all_bands else above
+    return ((f"{', '.join(passed)} proceed to statement parsing. " if passed else "")
+            + (f"{', '.join(dev)} proceed only when every deviation point (D1-D5) is Allowed; a "
+               "Refer is assessed and held for the approving authority, a Reject is declined. "
+               if dev else "")
+            + (f"{', '.join(never)} do not proceed. " if never else "")
+            + "A file with no loans or no band passes to statement analysis with a note.").strip()
 
 
 def _notes(report, policy) -> List[str]:
