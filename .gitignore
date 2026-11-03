@@ -19,3 +19,9 @@ frontend/report.sample.json
 # Google service account keys
 *service-account*.json
 *serviceaccount*.json
+
+# CRB deviation back-test: Google sign-in and customer data
+tools/crb_deviation/token.json
+tools/crb_deviation/client_secret*.json
+tools/crb_deviation/cache/
+tools/crb_deviation/*.xlsx
