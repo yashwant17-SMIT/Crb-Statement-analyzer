@@ -1,6 +1,6 @@
 """
 One-off back-test: score every customer on the intake sheet against the CRB
-deviation points D1-D6, and write an Excel file for the ops team that separates
+deviation points D1-D5 (the live tool's rules), and write an Excel file for the ops team that separates
 
   - customers rejected on band (EE-JJ) who would pass every deviation point
   - customers approved on band (AA-DD) who would fail one
@@ -39,7 +39,7 @@ def empty_record(n: int, app_id: str = "", customer: str = "", cell_text: str = 
     return {"row": n, "app_id": app_id, "customer": customer, "cell_text": cell_text, "link": "",
             "file_name": "", "crb_name": "", "national_id": "", "report_date": "", "band": "", "today": "",
             "group": checks.NOT_ASSESSED, "checks": None, "report": None,
-            "reason": "", "detail": "", "action": ""}
+            "reason": "", "detail": "", "action": "", "note": ""}
 
 
 def cannot(rec: dict, e: CannotAssess) -> dict:
@@ -47,33 +47,12 @@ def cannot(rec: dict, e: CannotAssess) -> dict:
     return rec
 
 
-def _no_score(data: bytes) -> bool:
-    """Whether the bureau printed 'No Score' (thin or no credit file) instead of a score and band."""
-    try:
-        import io
-        import pdfplumber
-        with pdfplumber.open(io.BytesIO(data)) as pdf:
-            return bool(re.search(r"No\s+Score", pdf.pages[0].extract_text() or ""))
-    except Exception:
-        return False
-
-
-def score(rec: dict, rep: ParsedCreditReport, data: bytes = b"") -> dict:
-    """Fill a record from a parsed report; a report without a band cannot be assessed."""
+def score(rec: dict, rep: ParsedCreditReport, policy: Policy) -> dict:
+    """Fill a record from a parsed report."""
     rec.update(report=rep, crb_name=rep.profile.names or "", national_id=rep.profile.national_id or "",
                report_date=rep.report_date or "", band=rep.band or "")
-    ev = checks.evaluate(rep)
-    if ev["band_rule"] == "No band":
-        if _no_score(data):
-            return cannot(rec, CannotAssess(
-                "Bureau gave No Score",
-                f"The CRB report says 'No Score', so there is no band to compare. It lists "
-                f"{len(rep.accounts)} loan(s); see Loan details.",
-                "Decide by hand: there is no band, so the EE–JJ deviation policy does not apply as written."))
-        return cannot(rec, CannotAssess(
-            "No band on the CRB report", "The tool could not read a band or score from the report.",
-            "Open the CRB report and check its score section by hand."))
-    rec.update(today=ev["band_rule"], group=ev["group"], checks=ev["checks"])
+    ev = checks.evaluate(rep, policy)
+    rec.update(today=ev["band_rule"], group=ev["group"], checks=ev["checks"], note=ev["note"])
     return rec
 
 
@@ -81,17 +60,13 @@ def parse(data: bytes, name: str) -> ParsedCreditReport:
     try:
         return parse_credit_report(data)
     except Exception as e:
-        if "No credit accounts found" in str(e) and _no_score(data):
-            raise CannotAssess("No credit history", f"'{name or 'The file'}' is a valid CRB report with no loans "
-                               "on it, and the bureau gave 'No Score'.",
-                               "Nothing to check against the deviation points. Decide by hand as a "
-                               "new-to-credit customer.")
         raise CannotAssess("CRB report could not be read", f"'{name or 'The file'}': {e}",
                            "Open the PDF. If it is a scan, a photo or not a TransUnion Rwanda report, "
                            "assess this customer by hand.")
 
 
-def assess_row(sess, row: List[dict], cols: Dict[str, int], n: int, cache: Path, account: str) -> dict:
+def assess_row(sess, row: List[dict], cols: Dict[str, int], n: int, cache: Path, account: str,
+               policy: Policy) -> dict:
     def cell(field: str) -> dict:
         i = cols.get(field)
         return row[i] if i is not None and i < len(row) else {"text": "", "links": []}
@@ -115,7 +90,7 @@ def assess_row(sess, row: List[dict], cols: Dict[str, int], n: int, cache: Path,
                                "Paste the Drive link to the customer's CRB PDF into the CRB column.")
         rec["link"] = f"https://drive.google.com/file/d/{ids[0]}/view"
         data, rec["file_name"] = download(sess, ids[0], cache, account)
-        return score(rec, parse(data, rec["file_name"]), data)
+        return score(rec, parse(data, rec["file_name"]), policy)
     except CannotAssess as e:
         return cannot(rec, e)
     except Exception as e:  # anything unexpected: say so, keep going
@@ -131,7 +106,7 @@ def pdf_paths(paths: List[Path]) -> List[Path]:
     return out
 
 
-def score_files(paths: List[Path], out: Path = None) -> None:
+def score_files(paths: List[Path], policy: Policy, out: Path = None) -> None:
     """Score local CRB PDFs (files or folders): print each one, and with several write a workbook."""
     files = pdf_paths(paths)
     records = []
@@ -140,7 +115,7 @@ def score_files(paths: List[Path], out: Path = None) -> None:
         rec["file_name"] = path.name
         try:
             data = path.read_bytes()
-            rec = score(rec, parse(data, path.name), data)
+            rec = score(rec, parse(data, path.name), policy)
         except CannotAssess as e:
             rec = cannot(rec, e)
         rec["customer"] = rec["crb_name"] or path.stem
@@ -156,7 +131,7 @@ def score_files(paths: List[Path], out: Path = None) -> None:
     name = Path(folders[0]).name.replace(" ", "_") if len(folders) == 1 else "pdfs"
     out = out or HERE / f"crb_deviation_{name}_{datetime.now():%Y-%m-%d}.xlsx"
     report.write(records, out, {"source": ", ".join(folders) or f"{len(files)} PDF files",
-                                "source_label": "CRB reports from", "row_label": "#"}, Policy())
+                                "source_label": "CRB reports from", "row_label": "#"}, policy)
     counts = Counter(report.OUTCOMES[r["group"]][0] + (f" ({r['today']} today)" if r["today"] else "")
                      for r in records)
     for label, k in counts.most_common():
@@ -174,8 +149,9 @@ def main(argv=None) -> None:
     p.add_argument("--out", type=Path, help="output .xlsx (default: crb_deviation_<date>.xlsx here)")
     p.add_argument("--client-secret", type=Path, default=HERE / "client_secret.json")
     args = p.parse_args(argv)
+    policy = Policy()
     if args.pdf:
-        return score_files(args.pdf, args.out)
+        return score_files(args.pdf, policy, args.out)
 
     sess = session(args.client_secret, HERE / "token.json")
     account = signed_in_as(sess)
@@ -194,14 +170,14 @@ def main(argv=None) -> None:
 
     records = []
     for k, (n, row) in enumerate(apps, 1):
-        rec = assess_row(sess, row, cols, n, HERE / "cache", account)
+        rec = assess_row(sess, row, cols, n, HERE / "cache", account, policy)
         records.append(rec)
         label = report.OUTCOMES[rec["group"]][0]
         print(f"[{k}/{len(apps)}] row {n} {rec['customer'] or rec['crb_name']}: {label}"
               f"{' - ' + rec['reason'] if rec['reason'] else ''}", file=sys.stderr)
 
     out = args.out or HERE / f"crb_deviation_{datetime.now():%Y-%m-%d}.xlsx"
-    report.write(records, out, {"source": f"{args.sheet}  (tab: {tab})", "account": account}, Policy())
+    report.write(records, out, {"source": f"{args.sheet}  (tab: {tab})", "account": account}, policy)
     counts = Counter(report.OUTCOMES[r["group"]][0] + (f" ({r['today']} today)" if r["today"] else "")
                      for r in records)
     for label, n in counts.most_common():

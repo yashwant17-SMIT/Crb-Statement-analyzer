@@ -1,4 +1,4 @@
-"""Deviation points D1-D6 and the sheet reading, on synthetic reports and API responses."""
+"""The back-test grouping on the live D1-D5 checks, and the sheet reading, on synthetic reports and API responses."""
 from datetime import datetime
 
 import pytest
@@ -32,8 +32,16 @@ def npa(**kw):
     return acct(is_non_performing=True, classification="LOSS", **kw)
 
 
-def by_code(rep):
-    return {c.code: c.result for c in checks.run_checks(rep)}
+def closed_npa(listed, term, last, principal=500_000):
+    return npa(is_open=False, listing_date=listed, repayment_terms=f"{term} MONTHLY" if term else None,
+               repayment_term_months=term, last_payment_date=last, principal_amount=principal,
+               balance_amount=0, arrears_amount=0)
+
+
+# The rules themselves are tested in backend/tests/test_crb.py; these check
+# the back-test runs them and groups customers against the band rule.
+def test_the_checks_are_the_live_d1_to_d5():
+    assert [c.code for c in checks.run_checks(report(accounts=[acct()]))] == ["D1", "D2", "D3", "D4", "D5"]
 
 
 def test_a_clean_ff_file_could_be_approved():
@@ -46,135 +54,29 @@ def test_a_clean_ff_file_could_be_approved():
     ("DD", checks.NO_CHANGE), ("AA", checks.NO_CHANGE), ("EE", checks.COULD_APPROVE), ("JJ", checks.COULD_APPROVE),
 ])
 def test_the_band_rule_splits_at_dd(band, group):
-    assert checks.evaluate(report(band=band))["group"] == group
+    assert checks.evaluate(report(band=band, accounts=[acct()]))["group"] == group
 
 
-def test_no_band_is_not_assessed():
-    assert checks.evaluate(report(band=None))["group"] == checks.NOT_ASSESSED
-
-
-# D1
-def test_d1_fraud_rejects():
-    rep = report(summary={"fraudulent_cases": {"your_sector": 0, "other_sectors": 1}})
-    assert by_code(rep)["D1"] == REJECT
-
-
-def test_d1_cheque_before_the_cutoff_is_old_history():
-    old = {"date_bounced": "10-Jun-2022"}
-    assert by_code(report(cheques=[old]))["D1"] == ALLOWED
-    assert by_code(report(cheques=[{"date_bounced": "10-Jun-2024"}]))["D1"] == REJECT
-
-
-# D2
-def test_d2_open_npa_owing_rejects():
-    assert by_code(report(accounts=[npa(balance_amount=10_000)]))["D2"] == REJECT
-
-
-def test_d2_open_npa_at_zero_is_allowed():
-    assert by_code(report(accounts=[npa(balance_amount=0, arrears_amount=0)]))["D2"] == ALLOWED
-
-
-def test_d2_open_npa_listed_before_the_cutoff_is_ignored_but_named():
-    c = checks.d2_open_npa(report(accounts=[npa(listing_date="01-Mar-2022")]), CUTOFF)
-    assert c.result == ALLOWED and "not counted, listed before 1 Jan 2024" in c.detail
-
-
-# D4
-@pytest.mark.parametrize("status,listed,open_", [
-    ("WRITTEN OFF", "01-Mar-2019", False), ("Written-off", "01-Mar-2024", True), ("CHARGED OFF", None, False),
+@pytest.mark.parametrize("band,score,accounts", [
+    (None, None, [acct()]), ("GG", None, [acct()]), ("JJ", 600, []), ("AA", 700, []),
 ])
-def test_d4_any_write_off_any_date_rejects(status, listed, open_):
-    rep = report(accounts=[acct(account_status=status, listing_date=listed, is_open=open_, balance_amount=0)])
-    assert by_code(rep)["D4"] == REJECT
-
-
-# D5
-def closed_npa(listed, term, last_paid):
-    a = npa(is_open=False, account_status="CLOSED", listing_date=listed, last_payment_date=last_paid, balance_amount=0)
-    a.repayment_term_months = term
-    return a
-
-
-def test_d5_matured_and_cleared_before_the_cutoff_is_allowed():
-    # Taken Jan '21, matures Jan '22, cleared before Jan '24.
-    assert by_code(report(accounts=[closed_npa("15-Jan-2021", 12, "20-Jun-2023")]))["D5"] == ALLOWED
-
-
-def test_d5_maturing_after_the_cutoff_rejects():
-    # Taken Jan '23, matures Jan '24, cleared before Oct '24.
-    assert by_code(report(accounts=[closed_npa("15-Jan-2023", 12, "20-Sep-2024")]))["D5"] == REJECT
-
-
-@pytest.mark.parametrize("principal,result", [(50_000, REFER), (50_001, REJECT)])
-def test_d5_after_the_cutoff_is_refer_up_to_50k_loan_size(principal, result):
-    a = closed_npa("15-Jan-2023", 12, "20-Sep-2024")
-    a.principal_amount, a.arrears_amount = principal, 0
-    assert by_code(report(accounts=[a]))["D5"] == result
-
-
-def test_d5_cleared_after_the_cutoff_rejects():
-    assert by_code(report(accounts=[closed_npa("15-Jan-2021", 12, "05-Feb-2024")]))["D5"] == REJECT
-
-
-@pytest.mark.parametrize("listed,term", [(None, 12), ("11-Oct-2021", None), (None, None)])
-def test_d5_cleared_before_the_cutoff_is_allowed_with_maturity_unknown(listed, term):
-    # Akimana Pacifique #2: a 2021 mobile loan, no readable term, cleared Aug 2023.
-    c = checks.d5_closed_npa(report(accounts=[closed_npa(listed, term, "15-Aug-2023")]), CUTOFF)
-    assert c.result == ALLOWED and "term end unknown" in c.detail
-
-
-def test_d5_unknown_maturity_shows_the_printed_terms():
-    a = closed_npa("11-Oct-2021", None, "15-Aug-2023")
-    a.repayment_terms = "Bullet"
-    assert "terms printed as 'Bullet'" in checks.d5_closed_npa(report(accounts=[a]), CUTOFF).detail
-
-
-def test_d5_no_clearance_date_is_review():
-    assert by_code(report(accounts=[closed_npa("15-Jan-2021", 12, None)]))["D5"] == REVIEW
-
-
-def test_d5_a_known_late_date_rejects_even_with_another_missing():
-    assert by_code(report(accounts=[closed_npa(None, None, "01-Mar-2025")]))["D5"] == REJECT
-
-
-# D6
-@pytest.mark.parametrize("dpd,arrears,result", [
-    (0, 0, ALLOWED), (15, 150_000, ALLOWED),
-    (16, 0, REFER), (90, 100_000, REFER),
-    (5, 150_001, REJECT), (16, 100_001, REJECT), (91, 0, REJECT), (120, 50_000, REJECT),
-    (19, 1_039_200, REJECT),   # Akimana Pacifique #10: 10x the Refer limit
-])
-def test_d6_days_past_due_and_arrears(dpd, arrears, result):
-    assert by_code(report(accounts=[acct(days_in_arrears=dpd, arrears_amount=arrears)]))["D6"] == result
-
-
-def test_d6_worst_account_wins_and_old_accounts_are_ignored():
-    rep = report(accounts=[acct(), acct(index=2, days_in_arrears=200, arrears_amount=900_000,
-                                        listing_date="01-Mar-2023")])
-    assert by_code(rep)["D6"] == ALLOWED
-    rep.accounts.append(acct(index=3, days_in_arrears=100, arrears_amount=60_000))
-    assert by_code(rep)["D6"] == REJECT
-
-
-@pytest.mark.parametrize("arrears,result", [(5_000, REVIEW), (150_000, REVIEW), (150_001, REJECT)])
-def test_d6_arrears_without_printed_days(arrears, result):
-    rep = report(accounts=[acct(days_in_arrears_reported=False, arrears_amount=arrears)])
-    assert by_code(rep)["D6"] == result
+def test_no_band_score_or_loans_is_approved_with_a_note(band, score, accounts):
+    rep = report(band=band, accounts=accounts)
+    rep.score = score
+    ev = checks.evaluate(rep)
+    assert ev["group"] == checks.NO_CREDIT_DATA and ev["checks"] == []
+    assert "no credit data" in ev["note"]
 
 
 @pytest.mark.parametrize("band,group", [("FF", checks.REJECTED_REFER), ("BB", checks.APPROVED_REFER)])
 def test_a_refer_puts_the_customer_in_the_refer_group(band, group):
-    assert checks.evaluate(report(band=band, accounts=[acct(days_in_arrears=30, arrears_amount=20_000)]))["group"] == group
+    rep = report(band=band, accounts=[acct(days_in_arrears=30, arrears_amount=60_000)])
+    assert checks.evaluate(rep)["group"] == group
 
 
-def test_review_outranks_refer():
-    rep = report(accounts=[acct(days_in_arrears=30, arrears_amount=20_000),
-                           closed_npa("15-Jan-2021", 12, None)])
-    assert checks.evaluate(rep)["overall"] == REVIEW
-
-
-def test_an_approved_band_with_a_write_off_would_be_rejected():
-    ev = checks.evaluate(report(band="BB", accounts=[acct(account_status="WRITTEN OFF", is_open=False)]))
+def test_an_approved_band_with_a_recent_write_off_would_be_rejected():
+    ev = checks.evaluate(report(band="BB", accounts=[
+        acct(account_status="WRITTEN OFF", is_open=False, arrears_amount=100_000)]))
     assert ev["group"] == checks.WOULD_REJECT
 
 
@@ -237,7 +139,7 @@ def row_of(text="", links=()):
 
 
 def reason(text="", links=(), sess=None, tmp=None):
-    return run.assess_row(sess, row_of(text, links), {"crb": 0}, 5, tmp, ACCOUNT)
+    return run.assess_row(sess, row_of(text, links), {"crb": 0}, 5, tmp, ACCOUNT, checks.Policy())
 
 
 @pytest.mark.parametrize("text,links,expected", [
@@ -282,27 +184,28 @@ def test_an_unreadable_pdf_names_the_file(tmp_path):
 
 # The workbook
 def scored(band, accounts, n):
-    return run.score(run.empty_record(n, customer=f"Customer {n}"), report(band=band, accounts=accounts))
+    return run.score(run.empty_record(n, customer=f"Customer {n}"), report(band=band, accounts=accounts),
+                     checks.Policy())
 
 
 def test_the_workbook_has_the_ops_tabs_and_explains_each_row(tmp_path):
     from openpyxl import load_workbook
     late = closed_npa("15-Jan-2023", 12, "20-Sep-2024")
-    recs = [scored("FF", [acct()], 3), scored("GG", [late], 4), scored("BB", [acct(days_in_arrears=30, arrears_amount=20_000)], 5),
+    recs = [scored("FF", [acct()], 3), scored("GG", [late], 4), scored("BB", [acct(days_in_arrears=30, arrears_amount=60_000)], 5),
             run.cannot(run.empty_record(6), CannotAssess("No access to the CRB file", "not shared", "request access")),
             scored(None, [acct()], 7)]
     out = tmp_path / "x.xlsx"
     xl.write(recs, out, {"source": "sheet", "account": ACCOUNT}, checks.Policy())
     wb = load_workbook(out)
-    assert wb.sheetnames == ["Summary", "Could be approved", "Refer to credit head", "Would be rejected",
-                             "Manual check", "Could not assess", "All customers", "Loan details"]
+    assert wb.sheetnames == ["Summary", "Could be approved", "Refer", "Would be rejected",
+                             "Manual check", "No credit data", "Could not assess", "All customers", "Loan details"]
     allc = {r[0]: r for r in wb["All customers"].iter_rows(min_row=2, values_only=True)}
     assert allc[3][5] == "Could be approved" and allc[3][7].startswith("Passes all 5 checks:")
     assert allc[4][5] == "Stays rejected"
     assert "✗ Fail – Closed NPA" in allc[4][7] and "last payment Sep 2024" in allc[4][7]
-    assert allc[5][5] == "Refer to credit head" and allc[5][4] == "Approved"
+    assert allc[5][5] == "Refer" and allc[5][4] == "Approved"
     assert allc[6][5] == "Could not assess" and allc[6][6] == "request access"
-    assert allc[7][5] == "Could not assess" and allc[7][7].startswith("No band on the CRB report")
+    assert allc[7][5] == "Approved - no credit data" and "no credit data" in allc[7][7]
     cna = list(wb["Could not assess"].iter_rows(min_row=2, values_only=True))
     assert cna[0][3:6] == ("No access to the CRB file", "not shared", "request access")
     loans = list(wb["Loan details"].iter_rows(min_row=2, values_only=True))

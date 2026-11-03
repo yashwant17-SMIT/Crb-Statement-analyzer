@@ -5,7 +5,8 @@ Tabs, in order:
   Summary               what the file is, counts per outcome, why rows could
                         not be assessed, and the checks in plain words
   Could be approved     one tab per outcome that needs action, same columns
-  Refer to credit head    as All customers
+  Refer                 as All customers
+  No credit data
   Would be rejected
   Manual check
   Could not assess      the exact reason and what to do, per row
@@ -39,9 +40,9 @@ OUTCOMES = {
     checks.COULD_APPROVE: ("Could be approved", GREEN, "Could be approved",
                            "Rejected today on band, but passes every deviation check. "
                            "Candidate for approval under the EE–JJ deviation policy."),
-    checks.REJECTED_REFER: ("Refer to credit head", AMBER, "Refer to credit head",
-                            "Rejected today on band. No check fails, but an overdue loan is within the "
-                            "Refer limits, so it needs the credit head's decision."),
+    checks.REJECTED_REFER: ("Refer", AMBER, "Refer",
+                            "Rejected today on band. No check fails, but at least one is within the "
+                            "Refer limits, so it needs the approving authority's decision."),
     checks.REJECTED_REVIEW: ("Manual check needed", BLUE, "Manual check",
                              "Rejected today on band. The CRB report is missing a date or figure a check "
                              "needs. Open the report and look at the loans listed under Why."),
@@ -49,18 +50,22 @@ OUTCOMES = {
                             "Rejected today on band, and fails at least one deviation check (see Why)."),
     checks.WOULD_REJECT: ("Would be rejected", RED, "Would be rejected",
                           "Approved today on band, but fails at least one deviation check (see Why)."),
-    checks.APPROVED_REFER: ("Refer to credit head", AMBER, "Refer to credit head",
-                            "Approved today on band. Under the deviation checks an overdue loan would need "
-                            "the credit head's sign-off."),
+    checks.APPROVED_REFER: ("Refer", AMBER, "Refer",
+                            "Approved today on band. Under the deviation checks at least one loan would need "
+                            "the approving authority's sign-off."),
     checks.APPROVED_REVIEW: ("Manual check needed", BLUE, "Manual check",
                              "Approved today on band. The CRB report is missing a date or figure a check "
                              "needs. Open the report and look at the loans listed under Why."),
     checks.NO_CHANGE: ("Stays approved", GREEN, None,
                        "Approved today on band, and passes every deviation check."),
+    checks.NO_CREDIT_DATA: ("Approved - no credit data", GREEN, "No credit data",
+                            "The CRB report has no band, no score or no loans. Credit policy approves it "
+                            "whatever the band, with a note; the deviation checks are not run."),
     checks.NOT_ASSESSED: ("Could not assess", GREY, "Could not assess",
                           "See Why for the exact reason and What to do."),
 }
-ACTION_TABS = ["Could be approved", "Refer to credit head", "Would be rejected", "Manual check", "Could not assess"]
+ACTION_TABS = ["Could be approved", "Refer", "Would be rejected", "Manual check", "No credit data",
+               "Could not assess"]
 
 MAIN_COLUMNS = [("Intake row", 9), ("Application ID", 14), ("Customer", 24), ("CRB band", 9), ("Today", 10),
                 ("Outcome", 20), ("What it means / what to do", 45), ("Why", 90)] + \
@@ -77,6 +82,8 @@ def why(rec: dict) -> str:
     """The reason, account by account; for a pass, what each check found."""
     if rec["checks"] is None:
         return f"{rec['reason']}. {rec['detail']}"
+    if not rec["checks"]:
+        return rec["note"]
     cs = rec["checks"]
     bad = sorted((c for c in cs if c.result != ALLOWED), key=lambda c: -checks._RANK[c.result])
     if not bad:
@@ -84,7 +91,9 @@ def why(rec: dict) -> str:
     lines = []
     for c in bad:
         lines.append(f"{MARK[c.result]} – {c.title}: {c.summary}")
-        lines += [f"    • {f.text}" for f in c.findings if f.result != ALLOWED]
+        for f in c.findings:
+            if f.result != ALLOWED:
+                lines += [f"    • {f.text}"] + [f"        ↳ {d}" for d in f.details]
     passed = [c.title for c in cs if c.result == ALLOWED]
     if passed:
         lines.append("✓ Passed: " + ", ".join(passed))
@@ -119,7 +128,7 @@ def loan_rows(rec: dict, policy) -> List[list]:
         hits = flags.get(id(a), [])
         worst = max(hits, key=lambda h: checks._RANK[h[1].result], default=None)
         flag = f"{MARK[worst[1].result]} – {worst[0].title}" if worst and worst[1].result != ALLOWED else ""
-        note = "\n".join(f.text.split(": ", 1)[-1] for _, f in hits)
+        note = "\n".join("\n".join([f.text.split(": ", 1)[-1]] + f.details) for _, f in hits)
         term = (f"{a.repayment_term_months:g} months" if a.repayment_term_months else a.repayment_terms or "")
         out.append([rec["row"], rec["customer"] or rec["crb_name"], OUTCOMES[rec["group"]][0], a.index,
                     a.account_type, a.trade_sector, "Open" if a.is_open else "Closed", a.account_status,
@@ -228,9 +237,10 @@ def _summary(ws, records: List[dict], info: dict, policy) -> None:
         ws.merge_cells(start_row=r - 1, start_column=2, end_row=r - 1, end_column=4)
     r += 1
     put("What this is", bold=True)
-    put("Customers with a CRB band of EE–JJ are rejected today. This file checks every customer against the "
-        "proposed deviation points. A rejected customer who passes every point could be approved. An approved "
-        "customer (band AA–DD) who fails a point would be rejected under the same points. "
+    put("Customers with a CRB band of EE–JJ are rejected today on band. The revised policy runs the deviation "
+        "points D1–D5 on every band (AA–JJ), with the same rules and limits as the live tool. A rejected "
+        "customer who passes every point could be approved; an approved customer who fails a point would be "
+        "rejected. A CRB report with no band, no score or no loans is approved with a note. "
         "Nothing in the intake sheet was changed.")
     ws.merge_cells(start_row=r - 1, start_column=1, end_row=r - 1, end_column=5)
     ws.row_dimensions[r - 1].height = 48
@@ -243,7 +253,7 @@ def _summary(ws, records: List[dict], info: dict, policy) -> None:
         label, fill, tab, meaning = OUTCOMES[g]
         today = ("Rejected" if g in (checks.COULD_APPROVE, checks.REJECTED_REFER, checks.REJECTED_REVIEW,
                                      checks.STAYS_REJECTED)
-                 else "" if g == checks.NOT_ASSESSED else "Approved")
+                 else "" if g in (checks.NOT_ASSESSED, checks.NO_CREDIT_DATA) else "Approved")
         put(label, today, counts.get(g, 0), meaning, tab or "All customers", fill=fill)
     r += 1
 
@@ -261,19 +271,27 @@ def _summary(ws, records: List[dict], info: dict, policy) -> None:
         r += 1
 
     put("The checks", bold=True)
-    head("Check", "", "", "Pass  ·  Refer (credit head)  ·  Fail", "")
+    head("Check", "", "", "Pass  ·  Refer (approving authority)  ·  Fail", "")
+    p = policy
     rules = {
         "D1": f"Pass: no fraud cases and no bounced cheques since {cutoff}.  Fail: any fraud case, or a bounced "
               f"cheque since {cutoff}.",
-        "D2": f"Pass: no open non-performing loan with money owing (loans listed from {cutoff}).  Fail: any.",
-        "D4": "Pass: no write-offs.  Fail: any write-off, paid or unpaid, any amount, any date.",
-        "D5": f"Pass: every closed non-performing loan was cleared (last payment) before {cutoff} and its term "
-              f"ended before then.  Refer: term ended or last payment on or after {cutoff}, loan of up to "
-              f"RWF {checks.D5_REFER_MAX_PRINCIPAL:,}.  Fail: the same, on a larger loan.",
-        "D6": f"Each open loan listed from {cutoff}.  Pass: 0–{checks.D6_ALLOWED_MAX_DPD} days overdue and arrears up "
-              f"to RWF {checks.D6_ALLOWED_MAX_ARREARS:,}.  Refer: {checks.D6_ALLOWED_MAX_DPD + 1}–"
-              f"{checks.D6_REFER_MAX_DPD} days overdue and arrears up to RWF {checks.D6_REFER_MAX_ARREARS:,}.  "
-              "Fail: anything beyond Refer.",
+        "D2": f"Each open performing loan listed from {cutoff}.  Pass: up to {p.deviation_d2_allowed_max_dpd} days "
+              f"overdue with arrears up to RWF {p.deviation_d2_allowed_max_arrears:,}, or "
+              f"{p.deviation_d2_allowed_max_dpd + 1}–{p.deviation_d2_refer_max_dpd} days with arrears up to "
+              f"RWF {p.deviation_d2_late_allowed_max_arrears:,}.  Refer: {p.deviation_d2_allowed_max_dpd + 1}–"
+              f"{p.deviation_d2_refer_max_dpd} days with arrears up to RWF {p.deviation_d2_refer_max_arrears:,}.  "
+              "Fail: anything beyond.",
+        "D3": f"Each open non-performing loan (or more than {p.deviation_d2_refer_max_dpd} days overdue) listed "
+              f"from {cutoff}.  Pass: arrears up to RWF {p.deviation_d3_allowed_max_arrears:,}.  Fail: above.",
+        "D4": f"Write-off listed before {cutoff}: Pass with at least {p.deviation_d4_min_good_loans} loans current "
+              f"and within terms since, Fail with fewer.  Listed since: Refer with arrears up to "
+              f"RWF {p.deviation_d4_reject_min_arrears:,}, Fail above.  A written-off NPA counts here only, with "
+              "its NPA details beneath it.",
+        "D5": f"Each closed non-performing loan.  Pass: cleared before {cutoff}.  Refer: cleared on or after it, "
+              f"loan (principal) up to RWF {p.deviation_d5_refer_max_principal:,}.  Fail: the same, larger loan.  "
+              "Cleared is the last payment date, else listing date + term; a loan listed since the cutoff was "
+              "cleared after it.",
     }
     for code in CODES:
         put(f"{code} {TITLES[code]}", "", "", rules[code])
@@ -285,6 +303,7 @@ def _summary(ws, records: List[dict], info: dict, policy) -> None:
     for k, v in [("All customers", "Every intake row, with its outcome, what to do, the reason account by account "
                                    "(Why), and the result of each check. Use the filter arrows in the header."),
                  ("Outcome tabs", "The same columns, only the customers with that outcome."),
+                 ("No credit data", "Reports with no band, score or loans, approved with the note in Why."),
                  ("Could not assess", "The exact reason each row couldn't be assessed and what to do about it."),
                  ("Loan details", "Every loan on each CRB report. Flag shows the loans that affected the result.")]:
         put(k, "", "", v)

@@ -1,40 +1,39 @@
 # CRB deviation back-test (one-off)
 
 Scores every customer on the intake sheet against the CRB deviation points
-D1–D6 and writes an Excel file showing:
+D1–D5, which run on every band (AA–JJ), and writes an Excel file showing:
 
 - **Could be approved**: rejected today on band (EE–JJ), but every deviation point is Allowed.
 - **Would be rejected**: approved today on band (AA–DD), but a deviation point is a Reject.
-- **Refer to credit head**: no point is a Reject, but at least one is Refer.
-- **Needs a look**: the report lacks a date or figure a rule needs.
+- **Refer**: no point is a Reject, but at least one is Refer (approving authority).
+- **Manual check**: the report lacks a date or figure a rule needs.
+- **No credit data**: the report has no band, no score or no loans; approved with a note.
 
 This is separate from the live tool. It reads the intake sheet and the CRB PDFs
-read-only, and writes only the local `.xlsx`. It reuses the tool's bureau
-parser (`backend/app/crb_parser.py`) so reports are read the same way.
+read-only, and writes only the local `.xlsx`. It uses the live tool's bureau
+parser and its deviation rules (`backend/app/deviation.py`) with the same
+`Policy` limits, so the results are what the live gate would decide.
 
-## The rules (`checks.py`)
+## The rules
 
 Loans listed from **1 Jan 2024** (the tool's `crb_history_cutoff`) are considered,
-except where a rule says otherwise. An account with no listing date is counted.
+except where a rule says otherwise. Amounts are arrears unless stated.
 
-| # | Point | Allowed | Refer (credit head) | Reject |
+| # | Point | Allowed | Refer | Reject |
 |---|---|---|---|---|
-| D1 | Fraud / bounced cheque | None | – | Any fraud case; any bounced cheque since the cutoff (same rule as the live tool) |
-| D2 | Open NPA | None, or RWF 0 owing | – | Any open NPA owing anything. Open NPAs listed before the cutoff are ignored but named in the detail. |
-| D4 | Write-off | None | – | Any write-off, paid or unpaid, any amount, **any date** |
-| D5 | Closed NPA | Cleared before the cutoff, and not maturing (listing date + term) on/after it | Matured or cleared on/after the cutoff, loan (principal) ≤ RWF 50,000 | The same, loan > RWF 50,000 |
-| D6 | Open performing accounts, per account | 0–15 days past due **and** arrears ≤ RWF 150,000 | 16–90 days past due **and** arrears ≤ RWF 100,000 | Anything beyond Refer |
+| D1 | Fraud / bounced cheque | None | – | Any fraud case; any bounced cheque since the cutoff |
+| D2 | Open performing loans | Up to 15 days and ≤ RWF 150,000; 16–90 days and ≤ RWF 50,000 | 16–90 days, ≤ RWF 75,000 | Anything beyond |
+| D3 | Open NPA (or > 90 days overdue) | Arrears ≤ RWF 75,000 | – | Arrears > RWF 75,000 |
+| D4 | Write-off before 2024 | At least 10 loans current and within terms since | – | Fewer than 10 |
+| D4 | Write-off since 2024 | – | Arrears ≤ RWF 75,000 | Arrears > RWF 75,000 |
+| D5 | Closed NPA | Cleared before 2024 | Cleared after, principal ≤ RWF 100,000 | Cleared after, principal > RWF 100,000 |
 
-- D3 is not in the spec.
-- D5: the report has no clearance date, so the **last payment date** stands in for it.
-  The 50,000 limit is on the loan's principal: the bureau prints 0 arrears on every closed account.
-  A loan cleared before the cutoff is Allowed even when its maturity can't be
-  worked out (the detail then shows the printed repayment terms). Only a missing
-  clearance date is **Review**.
-- D6: arrears with no days past due printed is **Review**, or Reject above RWF 150,000.
+- A written-off NPA counts under D4 only, with its NPA details beneath it.
+- D5: cleared is the last payment date, or else listing date + repayment term.
+  A loan listed since the cutoff was cleared after it. With neither, it is **Review**.
 - A customer passes only when every point is Allowed. The overall result is the
   worst point, in the order Allowed, Refer, Review, Reject.
-- The D6 limits are constants at the top of `checks.py`.
+- The limits are `Policy` fields in `backend/app/config.py`.
 
 ## One-time setup
 
