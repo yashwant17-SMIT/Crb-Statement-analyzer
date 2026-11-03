@@ -8,6 +8,7 @@ this file.
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -147,17 +148,90 @@ def drive_id(link: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def download(sess, file_id: str, cache: Path) -> bytes:
-    """The file's bytes, cached by ID so a rerun does not download again."""
-    path = cache / f"{file_id}.pdf"
-    if path.exists():
-        return path.read_bytes()
-    res = sess.get(DRIVE + quote(file_id), params={"alt": "media", "supportsAllDrives": "true"})
-    if res.status_code in (403, 404):
-        raise RuntimeError("Cannot open the CRB file (no access, not found, or a Google Doc rather than a PDF).")
-    _check(res, "Could not download the CRB file")
-    if not res.content.startswith(b"%PDF"):
-        raise RuntimeError("The CRB file is not a PDF.")
+class CannotAssess(Exception):
+    """Why a row could not be assessed: a short reason, the specifics, and what to do."""
+
+    def __init__(self, reason: str, detail: str, action: str):
+        super().__init__(f"{reason}: {detail}")
+        self.reason, self.detail, self.action = reason, detail, action
+
+
+def signed_in_as(sess) -> str:
+    res = sess.get("https://www.googleapis.com/drive/v3/about", params={"fields": "user(emailAddress)"})
+    return res.json().get("user", {}).get("emailAddress", "the signed-in account") if res.ok else "the signed-in account"
+
+
+_KINDS = {"application/vnd.google-apps.document": "a Google Doc",
+          "application/vnd.google-apps.spreadsheet": "a Google Sheet",
+          "application/vnd.google-apps.presentation": "a Google Slides file",
+          "application/msword": "a Word document",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "a Word document"}
+_PDF_TYPES = {"application/pdf", "application/octet-stream", "binary/octet-stream", ""}
+
+
+def _kind(mime: str) -> str:
+    if mime in _KINDS:
+        return _KINDS[mime]
+    if mime.startswith("image/"):
+        return f"an image ({mime.split('/', 1)[1].upper()})"
+    return f"a '{mime}' file"
+
+
+def _google_error(res) -> CannotAssess:
+    try:
+        err = res.json()["error"]
+        msg, reasons = err.get("message", ""), {e.get("reason") for e in err.get("errors", [])}
+    except Exception:
+        msg, reasons = res.text[:200], set()
+    if res.status_code == 429 or reasons & {"rateLimitExceeded", "userRateLimitExceeded"}:
+        return CannotAssess("Google was busy", f"Google Drive asked the tool to slow down ({msg}).",
+                            "Run the report again. Files already downloaded are reused.")
+    return CannotAssess("Google Drive error", f"HTTP {res.status_code}: {msg}",
+                        "Run the report again. If it repeats, open the CRB link to check the file.")
+
+
+def download(sess, file_id: str, cache: Path, account: str, _hops: int = 0) -> Tuple[bytes, str]:
+    """(PDF bytes, file name), cached by ID so a rerun does not download again.
+
+    Raises CannotAssess saying exactly why the file could not be used.
+    """
+    pdf, meta = cache / f"{file_id}.pdf", cache / f"{file_id}.json"
+    if pdf.exists():
+        name = json.loads(meta.read_text()).get("name", "") if meta.exists() else ""
+        return pdf.read_bytes(), name
+    res = sess.get(DRIVE + quote(file_id), params={
+        "fields": "name,mimeType,capabilities/canDownload,shortcutDetails", "supportsAllDrives": "true"})
+    if res.status_code == 404:
+        raise CannotAssess(
+            "No access to the CRB file",
+            f"Google Drive says this file doesn't exist or isn't shared with {account}, "
+            "the account this report was run as.",
+            f"Open the CRB link while signed in as {account}. If Google asks for access, request it, "
+            f"or ask whoever uploaded the CRB to share it with {account}. Then run the report again.")
+    if res.status_code != 200:
+        raise _google_error(res)
+    m = res.json()
+    name, mime = m.get("name", ""), m.get("mimeType", "")
+    target = (m.get("shortcutDetails") or {}).get("targetId")
+    if target and _hops == 0:
+        return download(sess, target, cache, account, 1)
+    if mime == "application/vnd.google-apps.folder":
+        raise CannotAssess("CRB link is a folder", f"The link opens the folder '{name}', not a file.",
+                           "Replace it with the link to the CRB PDF itself.")
+    if mime not in _PDF_TYPES:
+        raise CannotAssess("CRB file is not a PDF", f"The linked file '{name}' is {_kind(mime)}, not a PDF.",
+                           "Link the CRB report PDF as downloaded from the bureau. "
+                           "A photo, scan or retyped copy can't be read.")
+    if (m.get("capabilities") or {}).get("canDownload") is False:
+        raise CannotAssess("Download turned off", f"The owner of '{name}' has turned off downloading for viewers.",
+                           f"Ask the owner to allow downloads, or to give {account} edit access.")
+    media = sess.get(DRIVE + quote(file_id), params={"alt": "media", "supportsAllDrives": "true"})
+    if media.status_code != 200:
+        raise _google_error(media)
+    if not media.content.startswith(b"%PDF"):
+        raise CannotAssess("CRB file is not a PDF", f"'{name}' is named or labelled as a PDF but isn't one.",
+                           "Link the CRB report PDF as downloaded from the bureau.")
     cache.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(res.content)
-    return res.content
+    pdf.write_bytes(media.content)
+    meta.write_text(json.dumps({"name": name}))
+    return media.content, name

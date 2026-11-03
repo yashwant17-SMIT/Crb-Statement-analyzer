@@ -4,3 +4,5 @@ token.json
 # Downloaded bureau PDFs and results hold customer data
 cache/
 *.xlsx
+# Local folders of bureau PDFs
+Instant Kula/

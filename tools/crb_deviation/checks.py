@@ -17,7 +17,7 @@ or figure the rule needs. A customer passes only when every check is Allowed.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -39,6 +39,11 @@ D6_ALLOWED_MAX_ARREARS = 150_000   # ... with arrears at most this (RWF)
 D6_REFER_MAX_DPD = 90              # Refer: 16-90 days past due ...
 D6_REFER_MAX_ARREARS = 100_000     # ... with arrears at most this (RWF)
 
+# D5: a closed NPA that ran or was cleared after the cutoff is Refer up to this
+# loan size (principal, RWF), Reject above. Arrears can't be used: the bureau
+# prints 0 arrears on every closed account.
+D5_REFER_MAX_PRINCIPAL = 50_000
+
 WRITE_OFF = ("WRITTEN OFF", "WRITE OFF", "CHARGED OFF", "CHARGE OFF")
 AVG_MONTH_DAYS = 30.4375
 
@@ -56,11 +61,32 @@ GROUPS = [COULD_APPROVE, REJECTED_REFER, REJECTED_REVIEW, STAYS_REJECTED,
           WOULD_REJECT, APPROVED_REFER, APPROVED_REVIEW, NO_CHANGE, NOT_ASSESSED]
 
 
+TITLES = {"D1": "Fraud / bounced cheque", "D2": "Open NPA", "D4": "Write-off",
+          "D5": "Closed NPA", "D6": "Overdue open loans"}
+
+
+@dataclass
+class Finding:
+    """One account (or, for D1, one record) behind a check's result."""
+    result: str
+    text: str
+    account: Optional[CreditAccount] = None
+
+
 @dataclass
 class Check:
     code: str
     result: str
-    detail: str
+    summary: str
+    findings: List[Finding] = field(default_factory=list)
+
+    @property
+    def title(self) -> str:
+        return TITLES[self.code]
+
+    @property
+    def detail(self) -> str:
+        return " ".join([self.summary] + [f.text + "." for f in self.findings])
 
 
 def _norm(s: Optional[str]) -> str:
@@ -76,8 +102,16 @@ def is_npa(a: CreditAccount) -> bool:
     return bool(a.is_non_performing or _norm(a.classification) in NON_PERFORMING_CLASSES)
 
 
-def _name(a: CreditAccount) -> str:
-    return f"#{a.index} {a.account_type or a.trade_sector or 'account'} (listed {a.listing_date or '?'})"
+def day(value) -> str:
+    """'11-Feb-2026' or a datetime as '11 Feb 2026'; '?' when missing."""
+    d = _date(value) if isinstance(value, str) or value is None else value
+    return f"{d.day} {d:%b %Y}" if d else "?"
+
+
+def account_name(a: CreditAccount) -> str:
+    kind = a.account_type or "loan"
+    sector = f" ({a.trade_sector})" if a.trade_sector and a.trade_sector.upper() != kind.upper() else ""
+    return f"Account #{a.index} {kind}{sector}, listed {day(a.listing_date)}"
 
 
 def _rwf(x: float) -> str:
@@ -92,36 +126,46 @@ def d1_fraud_cheques(report: ParsedCreditReport, policy: Policy) -> Check:
     """Any fraud case, or a bounced cheque since the cutoff, is a reject (the live tool's rule)."""
     reasons = _adverse_records(report, policy)
     if reasons:
-        return Check("D1", REJECT, "; ".join(reasons))
+        return Check("D1", REJECT, "Fraud or bounced cheques on file.",
+                     [Finding(REJECT, r[0].upper() + r[1:]) for r in reasons])
     return Check("D1", ALLOWED, "No fraud cases or bounced cheques.")
 
 
 def d2_open_npa(report: ParsedCreditReport, cutoff: datetime) -> Check:
     """An open NPA listed since the cutoff with anything owing is a reject."""
-    open_npa = [a for a in report.accounts if a.is_open and is_npa(a)]
-    counted = [a for a in open_npa if _after_cutoff(a, cutoff)]
-    owing = [a for a in counted if a.balance_amount > 0 or a.arrears_amount > 0]
-    ignored = [a for a in open_npa if a not in counted]
-    note = (" Ignored, listed before the cutoff: " + ", ".join(_name(a) for a in ignored) + "."
-            if ignored else "")
-    if owing:
-        return Check("D2", REJECT, "Open NPA: " + "; ".join(
-            f"{_name(a)} balance {_rwf(a.balance_amount)}, arrears {_rwf(a.arrears_amount)}"
-            for a in owing) + "." + note)
-    return Check("D2", ALLOWED, "No open NPA." + note)
+    findings = []
+    for a in report.accounts:
+        if not (a.is_open and is_npa(a)):
+            continue
+        what = (f"{account_name(a)}: still open and non-performing ({a.classification or 'NPA'}), "
+                f"balance {_rwf(a.balance_amount)}, arrears {_rwf(a.arrears_amount)}")
+        if not _after_cutoff(a, cutoff):
+            findings.append(Finding(ALLOWED, f"{what}; not counted, listed before {day(cutoff)}", a))
+        elif a.balance_amount > 0 or a.arrears_amount > 0:
+            findings.append(Finding(REJECT, what, a))
+        else:
+            findings.append(Finding(ALLOWED, f"{what}; nothing owing", a))
+    result = _worst([f.result for f in findings])
+    owing = sum(f.result == REJECT for f in findings)
+    summary = (f"{owing} open non-performing loan(s) with money owing." if owing
+               else "No open non-performing loan with money owing.")
+    return Check("D2", result, summary, findings)
 
 
 def d4_write_off(report: ParsedCreditReport) -> Check:
     """Any write-off, paid or unpaid, any amount, any date, is a reject."""
-    w = [a for a in report.accounts if is_write_off(a)]
-    if w:
-        return Check("D4", REJECT, "Write-off: " + "; ".join(
-            f"{_name(a)} status {a.account_status or a.classification}" for a in w) + ".")
+    findings = [Finding(REJECT, f"{account_name(a)}: written off (status {a.account_status or a.classification}, "
+                                f"balance {_rwf(a.balance_amount)})", a)
+                for a in report.accounts if is_write_off(a)]
+    if findings:
+        return Check("D4", REJECT, f"{len(findings)} written-off loan(s); any write-off fails.", findings)
     return Check("D4", ALLOWED, "No write-offs.")
 
 
 def d5_closed_npa(report: ParsedCreditReport, cutoff: datetime) -> Check:
-    """A closed NPA is allowed only when it both matured and was cleared before the cutoff.
+    """A closed NPA is allowed when it both matured and was cleared before the cutoff.
+
+    Otherwise it is Refer up to D5_REFER_MAX_PRINCIPAL loan size, Reject above.
 
     Maturity is listing date + repayment term. The report carries no clearance
     date, so the last payment date stands in for it. A loan cleared before the
@@ -129,55 +173,68 @@ def d5_closed_npa(report: ParsedCreditReport, cutoff: datetime) -> Check:
     fully repaid by then cannot realistically still be running past it. Only a
     missing clearance date is Review.
     """
-    closed = [a for a in report.accounts if not a.is_open and is_npa(a) and not is_write_off(a)]
-    if not closed:
-        return Check("D5", ALLOWED, "No closed NPA.")
-    results, lines = [], []
-    for a in closed:
+    findings = []
+    for a in report.accounts:
+        if a.is_open or not is_npa(a) or is_write_off(a):
+            continue
         listed, cleared = _date(a.listing_date), _date(a.last_payment_date)
         term = a.repayment_term_months
         matured = listed + timedelta(days=term * AVG_MONTH_DAYS) if listed and term else None
-        unknown = "maturity unknown" + (f" (terms {a.repayment_terms!r})" if a.repayment_terms
-                                        else " (no repayment terms)")
-        when = (f"matures {matured:%b %Y}" if matured else unknown) + ", " + \
-               (f"cleared {cleared:%b %Y}" if cleared else "clearance unknown")
-        if (matured and matured >= cutoff) or (cleared and cleared >= cutoff):
-            results.append(REJECT)
+        end = (f"term ended {matured:%b %Y}" if matured else
+               "term end unknown" + (f" (terms printed as '{a.repayment_terms}')" if a.repayment_terms
+                                     else " (no repayment terms printed)"))
+        paid = f"last payment {cleared:%b %Y}" if cleared else "no last payment date"
+        late = [w for w, d in (("term ended", matured), ("last payment", cleared)) if d and d >= cutoff]
+        if late:
+            r = REFER if a.principal_amount <= D5_REFER_MAX_PRINCIPAL else REJECT
+            why = (f"{' and '.join(late)} on or after {day(cutoff)}, loan of {_rwf(a.principal_amount)} "
+                   f"{'within' if r == REFER else 'above'} the Refer limit of {_rwf(D5_REFER_MAX_PRINCIPAL)}")
         elif cleared:
-            results.append(ALLOWED)
+            r, why = ALLOWED, f"cleared before {day(cutoff)}"
         else:
-            results.append(REVIEW)
-        lines.append(f"{_name(a)} {when}: {results[-1]}")
-    return Check("D5", _worst(results), "Closed NPA: " + "; ".join(lines) + ".")
+            r, why = REVIEW, "can't tell when it was cleared"
+        findings.append(Finding(r, f"{account_name(a)}: closed NPA, {end}, {paid}; {why}", a))
+    if not findings:
+        return Check("D5", ALLOWED, "No closed non-performing loans.")
+    result = _worst([f.result for f in findings])
+    summary = {REJECT: f"A closed NPA ran or was cleared after the cutoff on a loan above "
+                       f"{_rwf(D5_REFER_MAX_PRINCIPAL)}.",
+               REFER: f"A closed NPA ran or was cleared after the cutoff on a loan of up to "
+                      f"{_rwf(D5_REFER_MAX_PRINCIPAL)}.",
+               REVIEW: "A closed NPA has no last payment date, so the clearance date is unknown.",
+               ALLOWED: "Every closed NPA was cleared before the cutoff."}[result]
+    return Check("D5", result, summary, findings)
 
 
 def d6_open_accounts(report: ParsedCreditReport, cutoff: datetime) -> Check:
     """Each open performing account listed since the cutoff, on days past due and arrears."""
     accounts = [a for a in report.accounts
                 if a.is_open and not is_npa(a) and not is_write_off(a) and _after_cutoff(a, cutoff)]
-    results, flagged = [], []
+    findings = []
     for a in accounts:
         dpd, arrears = a.days_in_arrears, a.arrears_amount
-        why = f"{dpd} days past due, arrears {_rwf(arrears)}"
+        what = f"{account_name(a)}: {dpd} days overdue, arrears {_rwf(arrears)}"
         if not a.days_in_arrears_reported and arrears > 0:
             # Above both arrears limits it fails whatever the days; below, the days decide.
             over = arrears > max(D6_ALLOWED_MAX_ARREARS, D6_REFER_MAX_ARREARS)
-            r, why = (REJECT if over else REVIEW), f"arrears {_rwf(arrears)}, days past due not printed"
+            what = f"{account_name(a)}: arrears {_rwf(arrears)}, days overdue not printed"
+            r, why = (REJECT, "arrears above every limit") if over else (REVIEW, "can't tell without the days overdue")
         elif dpd <= D6_ALLOWED_MAX_DPD and arrears <= D6_ALLOWED_MAX_ARREARS:
-            r = ALLOWED
+            continue
         elif D6_ALLOWED_MAX_DPD < dpd <= D6_REFER_MAX_DPD and arrears <= D6_REFER_MAX_ARREARS:
-            r = REFER
+            r, why = REFER, (f"within the Refer limit ({D6_ALLOWED_MAX_DPD + 1}-{D6_REFER_MAX_DPD} days, "
+                             f"up to {_rwf(D6_REFER_MAX_ARREARS)})")
         else:
-            r = REJECT
-        results.append(r)
-        if r != ALLOWED:
-            flagged.append(f"{_name(a)} {why}: {r}")
+            r, why = REJECT, (f"beyond the Refer limit ({D6_ALLOWED_MAX_DPD + 1}-{D6_REFER_MAX_DPD} days, "
+                              f"up to {_rwf(D6_REFER_MAX_ARREARS)})")
+        findings.append(Finding(r, f"{what}; {why}", a))
     if not accounts:
-        return Check("D6", ALLOWED, "No open performing accounts since the cutoff.")
-    if not flagged:
-        return Check("D6", ALLOWED, f"{len(accounts)} open account(s), all within "
-                     f"{D6_ALLOWED_MAX_DPD} days and {_rwf(D6_ALLOWED_MAX_ARREARS)}.")
-    return Check("D6", _worst(results), "; ".join(flagged) + ".")
+        return Check("D6", ALLOWED, f"No open performing loans listed since {day(cutoff)}.")
+    if not findings:
+        return Check("D6", ALLOWED, f"{len(accounts)} open loan(s), none more than {D6_ALLOWED_MAX_DPD} days "
+                     f"overdue or above {_rwf(D6_ALLOWED_MAX_ARREARS)} in arrears.")
+    return Check("D6", _worst([f.result for f in findings]),
+                 f"{len(findings)} of {len(accounts)} open loan(s) overdue beyond the Allowed limit.", findings)
 
 
 def run_checks(report: ParsedCreditReport, policy: Optional[Policy] = None) -> List[Check]:
@@ -216,4 +273,4 @@ def evaluate(report: ParsedCreditReport, policy: Optional[Policy] = None) -> Dic
         group = {ALLOWED: NO_CHANGE, REFER: APPROVED_REFER, REVIEW: APPROVED_REVIEW,
                  REJECT: WOULD_REJECT}[overall]
     return {"band": report.band, "band_rule": band_rule, "checks": checks,
-            "overall": overall, "group": group}
+            "overall": overall, "group": group, "report": report}
