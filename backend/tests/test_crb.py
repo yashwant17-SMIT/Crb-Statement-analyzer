@@ -598,19 +598,18 @@ def test_deviation_lowest_band_limits_who_gets_the_points():
     assert g["statement_parsing_allowed"] is False and "deviation" not in g
 
 
-@pytest.mark.parametrize("band", ["AA", "JJ", None])
-def test_no_loan_data_passes_to_the_statement_with_a_note(band):
-    r = assess_credit_report(make_report(band=band, score=None if band is None else 675), Policy())
+@pytest.mark.parametrize("band,score,loans", [
+    ("AA", 675, False), ("JJ", 600, False),     # no loans, any band
+    (None, None, True), (None, None, False),    # no band or score, with or without loans
+    ("GG", None, True),                         # a band but no score
+])
+def test_no_credit_data_is_approved_with_a_note(band, score, loans):
+    accounts = [account(listing_date="01-Mar-2025", days_in_arrears=200, arrears_amount=900_000)] if loans else []
+    r = assess_credit_report(make_report(band=band, score=score, accounts=accounts), Policy())
     g = r["gate"]
     assert g["statement_parsing_allowed"] is True and g["decision"] == "proceed"
-    assert "no loan data" in g["note"].lower() and "deviation" not in g
+    assert "no credit data" in g["note"] and "deviation" not in g
     assert r["findings"][0]["code"] == "CRB_NOTE"
-
-
-def test_no_score_with_loans_is_judged_on_the_points_with_a_note():
-    r = _gate(None, listing_date="01-Mar-2025")
-    g = r["gate"]
-    assert g["decision"] == "proceed" and "no bureau band" in g["note"].lower()
 
 
 @pytest.mark.parametrize("dpd,arrears,result", [

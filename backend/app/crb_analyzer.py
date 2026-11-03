@@ -209,10 +209,8 @@ def _deviation_gate(lead: str, dev: Dict[str, Any]) -> Dict[str, Any]:
 
 def _runs_deviation(rank: Optional[int], floor: int, policy: Policy) -> bool:
     """Whether the deviation points decide the gate for this band."""
-    if not policy.deviation_enabled:
+    if not policy.deviation_enabled or rank is None:
         return False
-    if rank is None:
-        return True
     return rank <= _rank(policy.deviation_lowest_band) and (policy.deviation_all_bands or rank > floor)
 
 
@@ -222,27 +220,26 @@ def assess_credit_report(report: ParsedCreditReport, policy: Policy) -> Dict[str
     open_accounts = [a for a in report.accounts if a.is_open]
 
     # ---------------------------------------------------------- the gate --
-    # Credit policy approves a file with no loans or no score whatever the
-    # band: there is nothing for the points to judge, so it goes on to the
-    # statement, with a note saying why.
-    no_band = "No bureau band or score could be read from the report"
-    if policy.deviation_enabled and not report.accounts:
+    # Credit policy approves a file with no band, no score or no loans whatever
+    # the band: there is nothing for the points to judge, so it goes on to the
+    # statement, with a note saying what was missing.
+    missing = [w for w, gone in (("no band", rank is None), ("no score", report.score is None),
+                                 ("no loans", not report.accounts)) if gone]
+    if policy.deviation_enabled and missing:
+        what = ", ".join(missing[:-1]) + (" and " if len(missing) > 1 else "") + missing[-1]
         gate = {
             "statement_parsing_allowed": True,
             "decision": "proceed",
-            "reason": f"{no_band + ' and' if rank is None else f'Band {band}:'} no loans on the "
-                      "bureau file. Credit policy passes a file with no loan data to statement "
-                      "analysis whatever the band.",
-            "note": "No loan data on the bureau file; passed to statement analysis without the CRB checks.",
+            "reason": f"The bureau report has {what}. Credit policy approves a file with no credit "
+                      "data whatever the band, so it passes to statement analysis without the CRB "
+                      "deviation checks.",
+            "note": f"Approved on the bureau with {what} on the report (no credit data); "
+                    "the CRB deviation checks were not run.",
         }
     elif _runs_deviation(rank, floor, policy):
-        lead = no_band if rank is None else (
-            f"Band {band} meets the minimum of {policy.min_band}" if rank <= floor
-            else f"Band {band} is below the minimum of {policy.min_band}")
+        lead = (f"Band {band} meets the minimum of {policy.min_band}" if rank <= floor
+                else f"Band {band} is below the minimum of {policy.min_band}")
         gate = _deviation_gate(lead, deviation.assess(report, policy, _adverse_records(report, policy)))
-        if rank is None:
-            gate["note"] = ("No bureau band or score; credit policy passes it to statement analysis "
-                            "on the deviation points alone.")
     elif rank is None:
         gate = {
             "statement_parsing_allowed": False,
@@ -1055,7 +1052,7 @@ def _gate_note(policy: Policy) -> str:
                "Refer is assessed and held for the approving authority, a Reject is declined. "
                if dev else "")
             + (f"{', '.join(never)} do not proceed. " if never else "")
-            + "A file with no loans or no band passes to statement analysis with a note.").strip()
+            + "A file with no band, no score or no loans is approved on the bureau with a note.").strip()
 
 
 def _notes(report, policy) -> List[str]:

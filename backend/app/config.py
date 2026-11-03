@@ -154,8 +154,8 @@ class Policy:
     # assessed in full and held for the approving authority; anything beyond
     # Refer is declined. deviation_all_bands False runs the points only below
     # min_band (bands at or above it pass on the band alone); deviation_enabled
-    # False goes back to a band-only gate. A report with no loans or no band
-    # passes to statement analysis with a note.
+    # False goes back to a band-only gate. A report with no band, no score or
+    # no loans is approved on the bureau with a note.
     deviation_enabled: bool = True
     deviation_all_bands: bool = True
     deviation_lowest_band: str = "JJ"
