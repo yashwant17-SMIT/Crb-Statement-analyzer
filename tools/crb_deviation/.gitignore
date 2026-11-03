@@ -1,0 +1,6 @@
+# Google sign-in: never commit
+client_secret*.json
+token.json
+# Downloaded bureau PDFs and results hold customer data
+cache/
+*.xlsx
