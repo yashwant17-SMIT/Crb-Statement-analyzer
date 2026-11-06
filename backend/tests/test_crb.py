@@ -910,3 +910,11 @@ def test_no_hit_summary_is_recognised_but_an_unread_summary_is_not():
     assert not _no_hit({"performing_accounts": zero})
     assert not _no_hit({"performing_accounts": zero,
                         "non-performing_accounts": {"your_sector": 0, "other_sectors": 1}})
+
+@pytest.mark.parametrize("status,is_open", [
+    ("CURRENT", True), ("WRITTEN OFF", True), ("ACCOUNT CLOSED", False),
+    ("PAID UP", False), ("EARLY SETTLEMENT", False), ("Paid  up", False),
+])
+def test_paid_up_and_settled_accounts_are_closed(status, is_open):
+    from app.crb_parser import is_open_status
+    assert is_open_status(status) is is_open

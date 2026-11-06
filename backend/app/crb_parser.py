@@ -438,10 +438,20 @@ def _parse_accounts(text: str) -> tuple[List[CreditAccount], List[Dict[str, str]
             a.listing_date = _first(r"Listing Date:\s*(\d{2}-\w{3}-\d{4})", b)
             a.last_payment_date = _first(r"Last Payment:\s*(\d{2}-\w{3}-\d{4})", b)
             a.disputed = (_first(r"Disputed\?\s*(\w+)", b) or "NO").upper() == "YES"
-            a.is_open = "CLOSED" not in a.account_status.upper()
+            a.is_open = is_open_status(a.account_status)
             a.payment_history = _parse_payment_history(b)
             accounts.append(a)
     return accounts, skipped
+
+
+# Statuses the bureau counts as closed in its own summary. A paid-up or
+# early-settled loan carries no balance, and its scheduled payment is history.
+CLOSED_STATUSES = ("CLOSED", "PAID UP", "EARLY SETTLEMENT")
+
+
+def is_open_status(status: str) -> bool:
+    status = re.sub(r"\s+", " ", status or "").upper()
+    return not any(c in status for c in CLOSED_STATUSES)
 
 
 def _parse_collaterals(text: str) -> tuple[List[Dict[str, Any]], int]:
