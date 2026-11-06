@@ -1,8 +1,9 @@
 # Google sign-in: never commit
 client_secret*.json
 token.json
+token_write.json
 # Downloaded bureau PDFs and results hold customer data
-cache/
+cache
 *.xlsx
 # Local folders of bureau PDFs
 Instant Kula/
