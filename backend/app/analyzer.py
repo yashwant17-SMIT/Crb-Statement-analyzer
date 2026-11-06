@@ -1638,7 +1638,9 @@ def _red_flags(df, inf, outf, failed, months, policy: Policy, statement, caps=No
             {
                 "code": "PASS_THROUGH",
                 "title": "Circular / round-tripping",
-                "severity": "severe" if pt_ratio >= 0.75 else "elevated",
+                # Shown on the report, never holds an application: same-day
+                # outflow is normal for most MoMo merchants (credit policy).
+                "severity": "elevated",
                 "metric": f"{pt_ratio:.1%} of gross inflow left the account the same day",
                 "summary": (
                     f"{_i(pt_total):,} of {_i(gross_in):,} RWF gross inflow exited on the day "
@@ -1681,7 +1683,8 @@ def _red_flags(df, inf, outf, failed, months, policy: Policy, statement, caps=No
                 {
                     "code": "AGENT_FLOAT",
                     "title": "Agent / float contamination",
-                    "severity": "severe" if depositors >= 30 else "elevated",
+                    # Shown on the report, never holds an application (credit policy).
+                    "severity": "elevated",
                     "metric": f"{len(cash_in)} cash deposits from {depositors} distinct depositors",
                     "summary": (
                         f"{_i(cash_in['amount'].sum()):,} RWF arrived as CASH_IN from "
@@ -1725,7 +1728,8 @@ def _red_flags(df, inf, outf, failed, months, policy: Policy, statement, caps=No
                 {
                     "code": "ROUND_NUMBERS",
                     "title": "Round-number inflows",
-                    "severity": "severe" if val_share >= 0.70 else "elevated",
+                    # Shown on the report, never holds an application (credit policy).
+                    "severity": "elevated",
                     "metric": f"{val_share:.1%} of counted inflow value is an exact "
                               f"multiple of {policy.round_step:,}",
                     "summary": (
@@ -1755,7 +1759,10 @@ def _red_flags(df, inf, outf, failed, months, policy: Policy, statement, caps=No
             {
                 "code": "UNDISCLOSED_BORROWING",
                 "title": "Existing borrowing",
-                "severity": "severe" if total_to_lenders >= policy.credit_cap else "elevated",
+                # Shown on the report, never holds an application: loan inflows are
+                # already left out of net inflow, and bureau loans' EMI is deducted
+                # (credit policy).
+                "severity": "elevated",
                 "metric": f"{total_to_lenders:,} RWF paid to lenders and credit institutions",
                 "summary": (
                     f"{len([r for r in loan_rows if r['direction']=='disbursement'])} confirmed "
