@@ -86,9 +86,14 @@ def decision(out: dict) -> dict:
     reasons = []
     if el.get("status") != "eligible":
         reasons.append(_sentence("Eligibility not assessed: " + (el.get("reason") or "see the report")))
-    blocking = [f.get("title") for f in crb.get("findings") or [] if f.get("severity") == "blocking"]
-    if blocking:
-        reasons.append(_sentence("CRB: " + "; ".join(filter(None, blocking))))
+    blocking = [f for f in crb.get("findings") or [] if f.get("severity") == "blocking"]
+    # A deviation Refer says which point, account and limit, not just its title.
+    referred = [f for f in blocking if f.get("code") == "DEVIATION_REFER"]
+    for f in referred:
+        reasons.append(_sentence("CRB deviation, refer to the approving authority: " + (f.get("detail") or "")))
+    titles = [f.get("title") for f in blocking if f not in referred]
+    if any(titles):
+        reasons.append(_sentence("CRB: " + "; ".join(filter(None, titles))))
     severe = [f.get("title") for f in rep.get("red_flags") or [] if f.get("severity") == "severe"]
     if severe:
         reasons.append(_sentence("Statement: " + "; ".join(filter(None, severe))))

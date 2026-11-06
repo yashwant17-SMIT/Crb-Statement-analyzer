@@ -185,6 +185,21 @@ def test_the_row_decision_for_the_ops_sheet(out, verdict, reason, sanctioned):
                                     "reason": reason}
 
 
+def test_a_deviation_refer_puts_the_points_in_the_reason():
+    detail = ("D2 Open performing loans: REFER – 1 of 1 open loan(s) overdue beyond the Allowed limits. "
+              "Account #3 Personal loan, listed 1 Mar 2025: 40 days overdue, arrears RWF 60,000; "
+              "16-90 days overdue, within the Refer limit of RWF 75,000.")
+    out = _out()
+    out["credit_bureau"]["findings"] = [
+        {"code": "DEVIATION_REFER", "severity": "blocking", "detail": detail,
+         "title": "Band BB deviation: refer to the approving authority"},
+        {"code": "STALE_REPORT", "severity": "blocking", "title": "Report older than 30 days"}]
+    row = intake.decision(out)
+    assert row["decision"] == "on_hold" and row["sanctioned_amount"] == 800000
+    assert row["reason"] == ("CRB deviation, refer to the approving authority: " + detail
+                             + " CRB: Report older than 30 days.")
+
+
 def test_the_route_returns_the_row_decision(engine):
     engine["gate"](False)
     row = post().json()["row"]
