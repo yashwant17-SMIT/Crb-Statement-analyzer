@@ -26,10 +26,11 @@ except where a rule says otherwise. Amounts are arrears unless stated.
 | D3 | Open NPA (or > 90 days overdue) | Arrears ≤ RWF 75,000 | – | Arrears > RWF 75,000 |
 | D4 | Write-off before 2024 | At least 10 loans current and within terms since | – | Fewer than 10 |
 | D4 | Write-off since 2024 | – | Arrears ≤ RWF 75,000 | Arrears > RWF 75,000 |
-| D5 | Closed NPA | Cleared before 2024 | Cleared after, principal ≤ RWF 100,000 | Cleared after, principal > RWF 100,000 |
+| D5 | Closed NPA | Cleared before 2024; or cleared after, principal ≤ RWF 75,000 and at least 6 months ago | – | Cleared after, principal > RWF 75,000 or less than 6 months ago |
 
 - A written-off NPA counts under D4 only, with its NPA details beneath it.
-- D5: cleared is the last payment date, or else listing date + repayment term.
+- D5: cleared is the last payment date, or else listing date + repayment term, or for a
+  mobile loan that prints no terms, listing date + 30 days (`deviation_d5_mobile_loan_days`).
   A loan listed since the cutoff was cleared after it. With neither, it is **Review**.
 - A customer passes only when every point is Allowed. The overall result is the
   worst point, in the order Allowed, Refer, Review, Reject.

@@ -690,13 +690,14 @@ def test_write_off_leaves_other_accounts_in_their_findings():
 
 @pytest.mark.parametrize("listed,last,terms,principal,result", [
     ("01-Jan-2021", "01-Dec-2022", 12, 900_000, "allowed"),  # matured and cleared before Jan 2024
-    ("01-Jan-2023", "01-Oct-2024", 12, 100_000, "refer"),    # cleared after, loan at the limit
-    ("01-Jan-2023", "01-Oct-2024", 12, 100_001, "reject"),   # cleared after, loan above it
+    ("01-Jan-2023", "01-Oct-2024", 12, 75_000, "allowed"),   # cleared after, loan at the limit, long ago
+    ("01-Jan-2023", "01-Oct-2024", 12, 75_001, "reject"),    # cleared after, loan above it
     ("01-Jan-2023", "01-Jun-2023", 24, 900_000, "allowed"),  # cleared early, term ran past the cutoff
     ("01-Jan-2021", "01-Jun-2022", None, 900_000, "allowed"),  # cleared before, term unknown
-    ("01-Mar-2024", None, None, 100_001, "reject"),          # no payment date, listed since the cutoff
+    ("01-Mar-2024", None, None, 75_001, "reject"),           # no dates, listed since the cutoff, above the limit
+    ("01-Mar-2024", None, None, 50_000, "review"),           # the same, small: can't tell if 6 months ago
     ("01-Jan-2021", None, 12, 900_000, "allowed"),           # no payment date, term ended 2022
-    ("01-Jan-2023", None, 24, 50_000, "refer"),              # no payment date, term ran to 2025
+    ("01-Jan-2023", None, 24, 50_000, "allowed"),            # no payment date, term ended Jan 2025
     ("01-Jan-2021", None, None, 900_000, "review"),          # nothing to date the clearance by
 ])
 def test_d5_closed_npa(listed, last, terms, principal, result):
@@ -704,6 +705,45 @@ def test_d5_closed_npa(listed, last, terms, principal, result):
               last_payment_date=last, repayment_terms=terms and f"{terms} MONTHLY", repayment_term_months=terms,
               principal_amount=principal, balance_amount=0, arrears_amount=0)
     assert _points(r)["D5"] == result
+
+
+@pytest.mark.parametrize("last,result", [
+    ("01-May-2026", "allowed"),   # exactly 6 months before 1 Nov 2026
+    ("02-May-2026", "reject"),    # a day short of 6 months
+    ("01-Jan-2024", "allowed"),   # on the cutoff, long ago
+])
+def test_d5_small_npa_needs_six_months_since_clearance(last, result):
+    from app import deviation
+    a = account(is_open=False, classification="LOSS", is_non_performing=True, listing_date="01-Jan-2023",
+                last_payment_date=last, principal_amount=50_000, balance_amount=0, arrears_amount=0)
+    check = deviation.d5_closed_npa(make_report(band="GG", accounts=[a]), datetime(2024, 1, 1), Policy(),
+                                    today=datetime(2026, 11, 1))
+    assert check.result == result
+
+
+@pytest.mark.parametrize("listed,principal,result", [
+    ("15-Nov-2023", 900_000, "allowed"),  # 30 days on is 15 Dec 2023, before the cutoff
+    ("15-Dec-2023", 50_000, "allowed"),   # ends 14 Jan 2024, small and long ago
+    ("15-Dec-2023", 75_001, "reject"),    # ends after the cutoff, above the limit
+    ("15-Jun-2026", 50_000, "reject"),    # ends 15 Jul 2026, under 6 months before 1 Nov 2026
+])
+def test_d5_mobile_loan_without_terms_runs_30_days_from_listing(listed, principal, result):
+    from app import deviation
+    a = account(account_type="MOBILE LOAN", is_open=False, classification="Normal Risk", is_non_performing=True,
+                listing_date=listed, repayment_terms="", principal_amount=principal, balance_amount=0,
+                arrears_amount=0)
+    check = deviation.d5_closed_npa(make_report(band="GG", accounts=[a]), datetime(2024, 1, 1), Policy(),
+                                    today=datetime(2026, 11, 1))
+    assert check.result == result
+
+
+def test_d5_other_loan_without_terms_is_still_review():
+    from app import deviation
+    a = account(is_open=False, classification="LOSS", is_non_performing=True, listing_date="15-Nov-2021",
+                repayment_terms="", principal_amount=50_000, balance_amount=0, arrears_amount=0)
+    check = deviation.d5_closed_npa(make_report(band="GG", accounts=[a]), datetime(2024, 1, 1), Policy(),
+                                    today=datetime(2026, 11, 1))
+    assert check.result == "review"
 
 
 def test_refer_assesses_the_statement_but_holds_for_the_approving_authority():
@@ -910,6 +950,7 @@ def test_no_hit_summary_is_recognised_but_an_unread_summary_is_not():
     assert not _no_hit({"performing_accounts": zero})
     assert not _no_hit({"performing_accounts": zero,
                         "non-performing_accounts": {"your_sector": 0, "other_sectors": 1}})
+
 
 @pytest.mark.parametrize("status,is_open", [
     ("CURRENT", True), ("WRITTEN OFF", True), ("ACCOUNT CLOSED", False),

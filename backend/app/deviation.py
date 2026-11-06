@@ -21,12 +21,14 @@ arrears unless stated; only loans listed since the cutoff count, except D4.
                                  current and within terms since, otherwise Refer;
                                  listed since the cutoff: arrears > 75,000 Reject, otherwise Refer
     D5  Closed NPA               cleared before the cutoff: Allowed;
-                                 otherwise principal <= 100,000: Refer, above: Reject
+                                 otherwise principal <= 75,000 and cleared at least
+                                 6 months before today: Allowed; anything else: Reject
 
 A write-off takes precedence: a written-off loan that is also an open or
 closed NPA is judged under D4 only, with its NPA details listed beneath it.
 The report has no clearance date; D5 works one out from the last payment
-date, the listing date and the repayment term (see _cleared).
+date, the listing date and the repayment term, taking 30 days for a mobile
+loan that prints no terms (see _cleared).
 """
 from __future__ import annotations
 
@@ -231,67 +233,92 @@ def d4_write_off(report: ParsedCreditReport, cutoff: datetime, policy: Policy) -
     return Check("D4", result, summary, findings)
 
 
-def _cleared(a: CreditAccount, cutoff: datetime) -> tuple:
-    """(cleared on or after the cutoff?, how that is known) for a closed NPA.
+def _cleared(a: CreditAccount, cutoff: datetime, mobile_loan_days: int) -> tuple:
+    """(clearance date or None, cleared on or after the cutoff?, how that is known) for a closed NPA.
 
     The report prints no clearance date. The last payment date stands in for
-    it; without one, a loan listed since the cutoff was cleared after it (it
-    can't be cleared before it is listed), and one listed before falls back to
-    its closure date as per the repayment term (listing date + term). None
-    when nothing on the report says.
+    it; without one, the closure date as per the repayment term (listing date
+    + term). A mobile loan often prints no terms at all: it is taken to run
+    mobile_loan_days from listing. A loan listed since the cutoff with none of
+    these was cleared after the cutoff (it can't be cleared before it is
+    listed), on a date the report doesn't give. The flag is None when nothing
+    on the report says.
     """
     listed, cleared = _date(a.listing_date), _date(a.last_payment_date)
     if cleared:
-        return cleared >= cutoff, f"last payment {cleared:%b %Y}"
-    if listed and listed >= cutoff:
-        return True, f"no last payment date, listed {day(listed)} so cleared after it"
+        return cleared, cleared >= cutoff, f"last payment {cleared:%b %Y}"
     term = a.repayment_term_months
     if listed and term:
         matured = listed + timedelta(days=term * AVG_MONTH_DAYS)
-        return matured >= cutoff, f"no last payment date, term ended {matured:%b %Y}"
+        return matured, matured >= cutoff, f"no last payment date, term ended {matured:%b %Y}"
+    if listed and not a.repayment_terms and "MOBILE LOAN" in a.account_type.upper():
+        matured = listed + timedelta(days=mobile_loan_days)
+        return matured, matured >= cutoff, (f"no last payment date or terms, a mobile loan taken as "
+                                            f"{mobile_loan_days} days from listing, so ended {day(matured)}")
+    if listed and listed >= cutoff:
+        return None, True, f"no last payment date or term, listed {day(listed)} so cleared after it"
     terms = f"terms printed as '{a.repayment_terms}'" if a.repayment_terms else "no repayment terms printed"
-    return None, f"no last payment date and term end unknown ({terms})"
+    return None, None, f"no last payment date and term end unknown ({terms})"
 
 
-def d5_closed_npa(report: ParsedCreditReport, cutoff: datetime, policy: Policy) -> Check:
+def _months_before(d: datetime, months: int) -> datetime:
+    """The same day `months` calendar months before d (clamped to the month's end)."""
+    y, m = divmod(d.year * 12 + d.month - 1 - months, 12)
+    first_next = datetime(y + (m + 1) // 12, (m + 1) % 12 + 1, 1)
+    return datetime(y, m + 1, min(d.day, (first_next - timedelta(days=1)).day))
+
+
+def d5_closed_npa(report: ParsedCreditReport, cutoff: datetime, policy: Policy,
+                  today: Optional[datetime] = None) -> Check:
     """Cleared before the cutoff is Allowed, however long the term ran.
 
-    Cleared on or after it, the loan's principal decides: up to
-    d5_refer_max_principal is Refer, above it Reject. (Not arrears: the bureau
-    prints 0 arrears on every closed account.) See _cleared for how the
-    clearance date is worked out; when it can't be, the point is Review.
+    Cleared on or after it, a loan (principal) of up to d5_allowed_max_principal
+    cleared at least d5_min_months_cleared months before today is Allowed;
+    anything else is Reject. (Principal, not arrears: the bureau prints 0
+    arrears on every closed account.) See _cleared for how the clearance date
+    is worked out; when it can't be, the point is Review.
     """
-    limit = policy.deviation_d5_refer_max_principal
+    limit, months = policy.deviation_d5_allowed_max_principal, policy.deviation_d5_min_months_cleared
+    settled_by = _months_before(today or datetime.now(), months)
     findings = []
     for a in report.accounts:
         if a.is_open or not is_npa(a) or is_write_off(a):
             continue
-        late, basis = _cleared(a, cutoff)
-        if late:
-            principal = a.principal_amount
-            r = REFER if principal <= limit else REJECT
-            why = (f"cleared on or after {day(cutoff)}, loan of {_rwf(principal)} "
-                   f"{'within' if r == REFER else 'above'} the Refer limit of {_rwf(limit)}")
-        elif late is None:
+        when, late, basis = _cleared(a, cutoff, policy.deviation_d5_mobile_loan_days)
+        principal = a.principal_amount
+        if late is None:
             r, why = REVIEW, "can't tell when it was cleared"
-        else:
+        elif not late:
             r, why = ALLOWED, f"cleared before {day(cutoff)}"
+        elif principal > limit:
+            r, why = REJECT, f"cleared on or after {day(cutoff)}, loan of {_rwf(principal)} above {_rwf(limit)}"
+        elif when is None:
+            r, why = REVIEW, (f"cleared on or after {day(cutoff)}, loan of {_rwf(principal)}; can't tell "
+                              f"whether it was cleared at least {months} months ago")
+        elif when <= settled_by:
+            r, why = ALLOWED, (f"cleared on or after {day(cutoff)}, loan of {_rwf(principal)}, "
+                               f"cleared at least {months} months ago")
+        else:
+            r, why = REJECT, (f"cleared on or after {day(cutoff)}, loan of {_rwf(principal)}, but cleared "
+                              f"less than {months} months ago")
         findings.append(Finding(r, f"{account_name(a)}: closed NPA, {basis}; {why}", a))
     if not findings:
         return Check("D5", ALLOWED, "No closed non-performing loans.")
     result = worst([f.result for f in findings])
-    summary = {REJECT: f"A closed NPA was cleared after the cutoff on a loan above {_rwf(limit)}.",
-               REVIEW: "A closed NPA has no last payment date or term, so the clearance date is unknown.",
-               REFER: f"A closed NPA was cleared after the cutoff on a loan of up to {_rwf(limit)}.",
-               ALLOWED: "Every closed NPA was cleared before the cutoff."}[result]
+    summary = {REJECT: f"A closed NPA cleared after the cutoff is above {_rwf(limit)} or was cleared "
+                       f"less than {months} months ago.",
+               REVIEW: "A closed NPA's clearance date can't be worked out from the report.",
+               ALLOWED: f"Every closed NPA was cleared before the cutoff, or is a loan of up to {_rwf(limit)} "
+                        f"cleared at least {months} months ago."}[result]
     return Check("D5", result, summary, findings)
 
 
-def run_checks(report: ParsedCreditReport, policy: Policy, adverse: List[str]) -> List[Check]:
+def run_checks(report: ParsedCreditReport, policy: Policy, adverse: List[str],
+               today: Optional[datetime] = None) -> List[Check]:
     cutoff = datetime.strptime(policy.crb_history_cutoff, "%Y-%m-%d")
     return [d1_fraud_cheques(adverse), d2_open_performing(report, cutoff, policy),
             d3_open_npa(report, cutoff, policy), d4_write_off(report, cutoff, policy),
-            d5_closed_npa(report, cutoff, policy)]
+            d5_closed_npa(report, cutoff, policy, today)]
 
 
 def assess(report: ParsedCreditReport, policy: Policy, adverse: List[str]) -> Dict[str, Any]:

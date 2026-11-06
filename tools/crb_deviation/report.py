@@ -288,10 +288,11 @@ def _summary(ws, records: List[dict], info: dict, policy) -> None:
               f"and within terms since, Fail with fewer.  Listed since: Refer with arrears up to "
               f"RWF {p.deviation_d4_reject_min_arrears:,}, Fail above.  A written-off NPA counts here only, with "
               "its NPA details beneath it.",
-        "D5": f"Each closed non-performing loan.  Pass: cleared before {cutoff}.  Refer: cleared on or after it, "
-              f"loan (principal) up to RWF {p.deviation_d5_refer_max_principal:,}.  Fail: the same, larger loan.  "
-              "Cleared is the last payment date, else listing date + term; a loan listed since the cutoff was "
-              "cleared after it.",
+        "D5": f"Each closed non-performing loan.  Pass: cleared before {cutoff}, or cleared on or after it with "
+              f"a loan (principal) up to RWF {p.deviation_d5_allowed_max_principal:,} cleared at least "
+              f"{p.deviation_d5_min_months_cleared} months ago.  Fail: anything else cleared on or after it.  "
+              "Cleared is the last payment date, else listing date + term (30 days for a mobile loan with no "
+              "terms); a loan listed since the cutoff was cleared after it.",
     }
     for code in CODES:
         put(f"{code} {TITLES[code]}", "", "", rules[code])

@@ -167,7 +167,9 @@ class Policy:
     deviation_d3_allowed_max_arrears: int = 75_000    # open NPA (or beyond the Refer days): above is Reject
     deviation_d4_min_good_loans: int = 10             # write-off before the cutoff: Allowed with this many good loans since
     deviation_d4_reject_min_arrears: int = 75_000     # write-off since the cutoff: above this arrears is Reject, else Refer
-    deviation_d5_refer_max_principal: int = 100_000   # closed NPA cleared after the cutoff (loan size)
+    deviation_d5_allowed_max_principal: int = 75_000  # closed NPA cleared after the cutoff: Allowed up to this loan size ...
+    deviation_d5_min_months_cleared: int = 6          # ... when cleared at least this many months ago; else Reject
+    deviation_d5_mobile_loan_days: int = 30           # tenure assumed for a mobile loan that prints no terms
 
     # Advisory thresholds. These do NOT open or close the gate - they raise
     # findings, and a blocking finding means a credit officer must decide.
@@ -383,7 +385,9 @@ class Policy:
             "deviation_d3_allowed_max_arrears": self.deviation_d3_allowed_max_arrears,
             "deviation_d4_min_good_loans": self.deviation_d4_min_good_loans,
             "deviation_d4_reject_min_arrears": self.deviation_d4_reject_min_arrears,
-            "deviation_d5_refer_max_principal": self.deviation_d5_refer_max_principal,
+            "deviation_d5_allowed_max_principal": self.deviation_d5_allowed_max_principal,
+            "deviation_d5_min_months_cleared": self.deviation_d5_min_months_cleared,
+            "deviation_d5_mobile_loan_days": self.deviation_d5_mobile_loan_days,
             "statement_period_target_days": self.statement_period_target_days,
             "statement_period_tolerance_days": self.statement_period_tolerance_days,
             "statement_max_age_days": self.statement_max_age_days,
