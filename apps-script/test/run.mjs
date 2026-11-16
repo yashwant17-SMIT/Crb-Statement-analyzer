@@ -230,7 +230,7 @@ const OK = {
   results: { ops: [{ addSheet: { properties: { sheetId: 5, title: 'BENIE N · 1199' } } }], gid: 5, tab: 'BENIE N · 1199' },
 }
 const col = (h, name) => h.intake.cells[0].findIndex((c) => c.value === name)
-// Ledger assessment reads "<status> <when> · <result>" or "Error: <message>".
+// Ledger assessment reads "<status> · <result>" or "Error: <message>"; Ledger date says when.
 const assessment = (h, n) => String(h.intake.cells[n - 1][col(h, 'Ledger assessment')].value)
 const status = (h, n) => /^(Done|Blocked at CRB|Awaiting statement|Error|Processing…)/.exec(assessment(h, n))?.[1]
 const result = (h, n) => assessment(h, n).replace(/^Error: /, '')
@@ -253,7 +253,7 @@ const tests = {
     // The second row sees the tab the first one created.
     assert.equal(JSON.parse(h.fetches[1].opts.payload.results_state).tabs['BENIE N · 1199'], 5)
     // Ledger columns are added after the last header (G), once.
-    assert.deepEqual(h.intake.cells[0].slice(7).map((c) => c.value), ['Ledger assessment', 'Ledger report'])
+    assert.deepEqual(h.intake.cells[0].slice(7).map((c) => c.value), ['Ledger assessment', 'Ledger date', 'Ledger report'])
     assert.equal(status(h, 2), 'Done')
     assert.equal(status(h, 4), 'Done')
     assert.deepEqual(h.wb.batches.map((b) => b.id), ['intake-id', 'intake-id'], 'default: this spreadsheet')
@@ -290,12 +290,57 @@ const tests = {
   'a row that was interrupted mid-run is picked up again'() {
     const h = harness({ rows: [HEADER, row()], files: FILES, respond: () => ({ code: 200, body: OK }) })
     h.ctx.assessPending()
-    h.intake.cells[1][col(h, 'Ledger assessment')].value = 'Processing… ' + new Date(Date.now() - 5 * 60 * 1000).toISOString()
+    h.intake.cells[1][col(h, 'Ledger assessment')].value = 'Processing…'
+    h.intake.cells[1][col(h, 'Ledger date')].value = new Date(Date.now() - 5 * 60 * 1000)
     h.ctx.assessPending()
     assert.equal(h.fetches.length, 1, 'a run in progress is left alone')
-    h.intake.cells[1][col(h, 'Ledger assessment')].value = 'Processing… ' + new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    h.intake.cells[1][col(h, 'Ledger date')].value = new Date(Date.now() - 60 * 60 * 1000)
     h.ctx.assessPending()
     assert.equal(h.fetches.length, 2)
+    // A row an older script left mid-run carries its start time in the text.
+    h.intake.cells[1][col(h, 'Ledger assessment')].value = 'Processing… ' + new Date(Date.now() - 5 * 60 * 1000).toISOString()
+    h.intake.cells[1][col(h, 'Ledger date')].value = ''
+    h.ctx.assessPending()
+    assert.equal(h.fetches.length, 2)
+  },
+
+  'dates an older script wrote into Ledger assessment move to Ledger date'() {
+    const header = [...HEADER, 'Ledger assessment', 'Ledger report']
+    const old = (text) => [...row({ name: 'Old' }), text, '']
+    const h = harness({
+      rows: [header, old('Done 2026-10-15 14:02 · Band AA · Assessed — no findings'), old('Error: Customer type is empty.'), row()],
+      files: FILES, respond: () => ({ code: 200, body: OK }),
+    })
+    h.ctx.assessPending()
+    assert.deepEqual(h.intake.cells[0].slice(HEADER.length).map((c) => c.value), ['Ledger assessment', 'Ledger report', 'Ledger date'])
+    assert.equal(assessment(h, 2), 'Done · Band AA · Assessed — no findings')
+    const d = h.intake.cells[1][col(h, 'Ledger date')]
+    assert.deepEqual([d.value.getFullYear(), d.value.getMonth(), d.value.getDate(), d.value.getHours(), d.value.getMinutes()], [2026, 9, 15, 14, 2])
+    assert.equal(d.format, 'yyyy-mm-dd hh:mm')
+    assert.equal(assessment(h, 3), 'Error: Customer type is empty.', 'nothing to move')
+    assert.equal(h.fetches.length, 1, 'only the new row runs')
+    assert.equal(status(h, 4), 'Done')
+  },
+
+  'the menu moves the dates without assessing anything'() {
+    const header = [...HEADER, 'Ledger assessment', 'Ledger date', 'Ledger report']
+    const kept = new Date(2026, 10, 1, 9, 30)
+    const h = harness({
+      rows: [header,
+        [...row({ name: 'Old' }), 'Blocked at CRB 2026-10-20 09:05 · Band GG', '', ''],
+        [...row({ name: 'New' }), 'Done · Band AA', kept, ''],
+        row()],
+      files: FILES, respond: () => ({ code: 200, body: OK }),
+    })
+    h.ctx.separateDates()
+    assert.equal(h.fetches.length, 0, 'nothing is assessed')
+    assert.equal(assessment(h, 2), 'Blocked at CRB · Band GG')
+    assert.equal(h.intake.cells[1][col(h, 'Ledger date')].value.getDate(), 20)
+    assert.equal(h.intake.cells[2][col(h, 'Ledger date')].value, kept, 'a date already in place stays')
+    assert.equal(assessment(h, 4), '', 'the pending row is still pending')
+    assert.match(h.toasts.at(-1), /^1 date\(s\) moved/)
+    h.ctx.separateDates()
+    assert.match(h.toasts.at(-1), /^No dates left/)
   },
 
   'a non-Drive link is refused without a call'() {
@@ -397,8 +442,11 @@ const tests = {
     assert.equal(cell('Status Signed off by Credit risk team'), 'On Hold', "the dropdown's own spelling")
     assert.equal(cell('Sanctioned Amount'), 800000)
     assert.equal(cell('Basis of Rejection/ on-hold'), 'CRB: Written-off account.')
-    assert.deepEqual(h.intake.cells[0].slice(header.length).map((c) => c.value), ['Ledger assessment', 'Ledger report'])
-    assert.match(String(h.intake.cells[1][header.length].value), /^Done \d{4}-\d\d-\d\d \d\d:\d\d · /)
+    assert.deepEqual(h.intake.cells[0].slice(header.length).map((c) => c.value), ['Ledger assessment', 'Ledger date', 'Ledger report'])
+    assert.equal(h.intake.cells[1][header.length].value, 'Done · Band BB · Assessed — no findings')
+    const when = h.intake.cells[1][header.length + 1]
+    assert.ok(when.value instanceof Date && Date.now() - when.value < 60000, 'Ledger date is when it ran')
+    assert.equal(when.format, 'yyyy-mm-dd hh:mm')
   },
 
   'a status dropdown without the option is left for a person'() {

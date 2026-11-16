@@ -13,8 +13,9 @@
  *                      Ledger's own Sheets export lays them out
  *   this row           the outcome in the sheet's own columns when it has
  *                      them (CRB band, decision status, sanctioned amount,
- *                      reason), plus Ledger assessment (what happened, when)
- *                      and Ledger report (a link to the customer's tab)
+ *                      reason), plus Ledger assessment (what happened),
+ *                      Ledger date (when) and Ledger report (a link to the
+ *                      customer's tab)
  *
  * Columns are found by header, in any order (see FIELDS and LOOSE). A row is
  * pending while both its Ledger assessment and its decision status are empty;
@@ -29,8 +30,9 @@
  * Needs the Google Sheets advanced service (appsscript.json enables it).
  */
 
-var ASSESSMENT = 'Ledger assessment', REPORT = 'Ledger report';
-var LEDGER_COLS = [ASSESSMENT, REPORT];
+var ASSESSMENT = 'Ledger assessment', DATE = 'Ledger date', REPORT = 'Ledger report';
+var LEDGER_COLS = [ASSESSMENT, DATE, REPORT];
+var DATE_FORMAT = 'yyyy-mm-dd hh:mm';
 // Exact header names, compared without case, spaces or punctuation.
 var FIELDS = {
   customer: ['customer', 'customername', 'name', 'applicant', 'applicantname'],
@@ -78,6 +80,7 @@ function onOpen() {
   SpreadsheetApp.getUi().createMenu('Ledger')
     .addItem('Assess selected rows', 'assessSelected')
     .addItem('Assess all pending rows', 'assessPending')
+    .addItem('Move dates to Ledger date', 'separateDates')
     .addSeparator()
     .addItem('Check connection', 'checkConnection')
     .addItem('Turn on automatic runs (every 10 minutes)', 'enableAutomaticRuns')
@@ -103,6 +106,14 @@ function assessSelected() {
 function assessPending() {
   var ctx = context_();
   run_(ctx, pendingRows_(ctx), true);
+}
+
+/** Split the dates out of Ledger assessment without assessing anything. */
+function separateDates() {
+  var ctx = context_();
+  var moved = (ctx.split || 0) + splitDates_(ctx, ctx.cols);
+  SpreadsheetApp.getActive().toast(moved ? moved + ' date(s) moved to Ledger date.'
+    : 'No dates left in Ledger assessment.', 'Ledger');
 }
 
 /** The timer entry point: no dialogs, nothing to click. */
@@ -179,7 +190,7 @@ function run_(ctx, rows, interactive) {
 /** Assess sheet row n (1-based). True when Ledger returned an assessment. */
 function assessRow_(ctx, n) {
   var row = readRow_(ctx, n);
-  setLedger_(ctx, n, PROCESSING + ' ' + new Date().toISOString(), '');
+  setLedger_(ctx, n, PROCESSING, '');
   SpreadsheetApp.flush();
   try {
     if (row.problems.length) throw new Error(row.problems.join(' '));
@@ -213,7 +224,7 @@ function assessRow_(ctx, n) {
     var link = '=HYPERLINK("https://docs.google.com/spreadsheets/d/' + ctx.cfg.resultsId +
       '/edit#gid=' + body.results.gid + '","Open report")';
     var note = setOutcome_(ctx, n, body.row || {});
-    setLedger_(ctx, n, body.status + ' ' + stamp_() + ' · ' + body.result + note, link);
+    setLedger_(ctx, n, body.status + ' · ' + body.result + note, link);
     return true;
   } catch (e) {
     setLedger_(ctx, n, 'Error: ' + e.message, '');
@@ -311,13 +322,40 @@ function columns_(ctx) {
   ctx.headerRow = best.row;
   // The Ledger columns go after the last header, once.
   var next = header.length;
+  var addedDate = !(DATE in cols.out);
   LEDGER_COLS.forEach(function (name) {
     if (!(name in cols.out)) {
       ctx.sheet.getRange(best.row + 1, next + 1).setValue(name).setFontWeight('bold');
       cols.out[name] = next++;
     }
   });
+  if (addedDate) ctx.split = splitDates_(ctx, cols);
   return cols;
+}
+
+// Before Ledger date existed, the date sat inside Ledger assessment:
+// "Done 2026-10-15 14:02 · Band AA · …". Moved out when the column is added,
+// or from the menu; rows without one keep what they have. Returns how many moved.
+function splitDates_(ctx, cols) {
+  var a = cols.out[ASSESSMENT], d = cols.out[DATE];
+  var first = ctx.headerRow + 1, n = ctx.values.length - first;
+  if (n <= 0) return 0;
+  var texts = [], dates = [], moved = 0;
+  for (var i = first; i < ctx.values.length; i++) {
+    var s = ctx.values[i][a], when = ctx.values[i][d];
+    var m = /^(.*?) (\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d) · ([\s\S]*)$/.exec(text_(s));
+    if (m) {
+      s = ctx.values[i][a] = m[1] + ' · ' + m[7];
+      when = ctx.values[i][d] = new Date(+m[2], +m[3] - 1, +m[4], +m[5], +m[6]);
+      moved++;
+    }
+    texts.push([s == null ? '' : s]);
+    dates.push([when == null ? '' : when]);
+  }
+  if (!moved) return 0;
+  ctx.sheet.getRange(first + 1, a + 1, n, 1).setValues(texts);
+  ctx.sheet.getRange(first + 1, d + 1, n, 1).setValues(dates).setNumberFormat(DATE_FORMAT);
+  return moved;
 }
 
 // Pending: not yet assessed by Ledger, not already decided by a person, and
@@ -326,8 +364,10 @@ function pendingRows_(ctx) {
   var rows = [], c = ctx.cols;
   for (var i = ctx.headerRow + 1; i < ctx.values.length; i++) {
     var s = text_(ctx.values[i][c.out[ASSESSMENT]]);
-    var stale = s.indexOf(PROCESSING) === 0 &&
-      !(Date.now() - Date.parse(s.slice(PROCESSING.length).trim()) <= STALE_MS);
+    // An older script put the start time after "Processing…"; now it is in Ledger date.
+    var since = s.slice(PROCESSING.length).trim();
+    var started = since ? Date.parse(since) : new Date(ctx.values[i][c.out[DATE]]).getTime();
+    var stale = s.indexOf(PROCESSING) === 0 && !(Date.now() - started <= STALE_MS);
     var decided = c.decision != null && text_(ctx.values[i][c.decision]) !== '';
     if ((s === '' || stale) && !decided && !isBlank_(ctx, i)) rows.push(i + 1);
   }
@@ -435,16 +475,14 @@ function pdf_(link) {
 /* ------------------------------------------------------------- writing */
 function setLedger_(ctx, n, assessment, link) {
   setCell_(ctx, n, ctx.cols.out[ASSESSMENT], assessment);
+  setCell_(ctx, n, ctx.cols.out[DATE], new Date());
+  ctx.sheet.getRange(n, ctx.cols.out[DATE] + 1).setNumberFormat(DATE_FORMAT);
   setCell_(ctx, n, ctx.cols.out[REPORT], link);
 }
 
 function setCell_(ctx, n, j, value) {
   ctx.sheet.getRange(n, j + 1).setValue(value);
   ctx.values[n - 1][j] = value;
-}
-
-function stamp_() {
-  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
 }
 
 /**

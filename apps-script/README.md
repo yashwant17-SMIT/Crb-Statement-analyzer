@@ -15,7 +15,7 @@ Intake sheet ── Ledger ▸ Assess … ──▶ Apps Script (runs as the own
                                        │ → the Sheets write that records it
                                        ▼
    Apps Script applies that write to the results workbook, then sets the row:
-   CRB band · decision status · sanctioned amount · reason · Ledger assessment · Ledger report (link)
+   CRB band · decision status · sanctioned amount · reason · Ledger assessment · Ledger date · Ledger report (link)
 ```
 
 ## Where the output goes
@@ -39,7 +39,8 @@ workbook.
 | Decision status, e.g. *Status Signed off by Credit risk team*, *Status*, *Decision* | **Approved**, **Rejected** or **On hold**. With a dropdown, the option that matches (e.g. *On Hold*); if none matches, the cell is left empty and Ledger assessment says so. |
 | Sanctioned amount, e.g. *Sanctioned Amount* | The sanctioned RWF when the statement is eligible; otherwise empty. |
 | Reason, e.g. *Basis of Rejection/ on-hold*, *Reason* | Why it was rejected or put on hold; empty when approved. |
-| **Ledger assessment** *(added)* | `Done 2026-10-15 14:02 · Band AA · …`, `Blocked at CRB …`, or `Error: …`. |
+| **Ledger assessment** *(added)* | `Done · Band AA · …`, `Blocked at CRB · …`, or `Error: …`. |
+| **Ledger date** *(added)* | When the row was assessed (or failed), as a date-time: `2026-10-15 14:02`. |
 | **Ledger report** *(added)* | Link to the customer's tab. |
 
 The decision is Ledger's recommendation:
@@ -73,8 +74,10 @@ chips (read through the Sheets API). Only Google Drive file links are used.
 *"No CRB link in F5 (it shows "…")"* means the cell has text but no link the
 script can see: paste the plain Drive URL.
 
-On first run the script adds **Ledger assessment** and **Ledger report**
-after your last column. A row is pending while Ledger assessment is empty
+On first run the script adds **Ledger assessment**, **Ledger date** and
+**Ledger report** after your last column. On a sheet set up before Ledger
+date existed, it is added after Ledger report, and the dates already inside
+Ledger assessment (`Done 2026-10-15 14:02 · …`) are moved into it. A row is pending while Ledger assessment is empty
 **and** the decision status is empty, so rows already signed off are never
 re-run by *Assess all pending rows*. To run a row again, select it and use
 *Assess selected rows*, or clear both cells. Rows with a problem (a missing
@@ -167,6 +170,7 @@ Sheets export already writes to. The person who authorises the script needs
 
 - **Ledger → Assess selected rows**: select any cells in the rows you want.
 - **Ledger → Assess all pending rows**: every row with an empty Ledger assessment and decision status.
+- **Ledger → Move dates to Ledger date**: moves the date out of Ledger assessment on rows an older script assessed. Assesses nothing; safe to run more than once.
 - **Ledger → Turn on automatic runs**: pending rows every 10 minutes, with
   nobody clicking.
 
