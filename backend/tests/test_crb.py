@@ -885,6 +885,50 @@ def test_recent_repayment_behavior_counts_last_12_months():
     assert len(behavior["delayed_detail"]) == 3
 
 
+def _grid(late: dict) -> list:
+    """24 months, newest first (Oct 26 back to Nov 24), on time except `late`."""
+    months = [datetime(2026 - (i + 2) // 12, 12 - (i + 2) % 12, 1).strftime("%b %y") for i in range(24)]
+    return [{"month": m, "status": str(late.get(i, 0)) if i not in (22, 23) else "X"}
+            for i, m in enumerate(months)]
+
+
+def test_late_payments_cover_open_and_closed_loans_over_24_months():
+    from app import sheets
+    accts = [
+        account(index=1, payment_history=_grid({2: 41, 5: 8})),
+        account(index=2, is_open=False, account_status="ACCOUNT CLOSED", balance_amount=0,
+                payment_history=_grid({15: 72, 16: 95})),
+        account(index=3, payment_history=_grid({})),
+    ]
+    r = assess_credit_report(make_report(band="AA", accounts=accts), Policy(deviation_enabled=False))
+    lp = r["late_payments"]
+    assert (lp["accounts_late"], lp["open_accounts_late"], lp["closed_accounts_late"]) == (2, 1, 1)
+    assert (lp["late_months"], lp["late_months_last_12"], lp["worst_days_late"]) == (4, 2, 95)
+    assert lp["most_recent_late"] == "Aug 26"
+    assert lp["buckets"]["last_12"] == {"1-30": 1, "31-60": 1, "61-90": 0, "90+": 0}
+    assert lp["buckets"]["months_13_24"] == {"1-30": 0, "31-60": 0, "61-90": 1, "90+": 1}
+    assert [a["index"] for a in lp["accounts"]] == [2, 1], "worst first"
+    assert lp["summary"].startswith("4 late months across 2 loans")
+    f = next(f for f in r["findings"] if f["code"] == "LATE_PAYMENTS")
+    assert f["severity"] == "warning"
+    assert r["gate"]["recommendation"] == "proceed", "report only, never a hold"
+    lay = sheets.build_layout(r, None, {}, "A1", datetime(2026, 11, 18))
+    assert "Late EMI payments (last 24 months)" in [row[0] for row, k in zip(lay.rows, lay.kind) if k == "title"]
+
+
+def test_late_payments_only_before_the_last_12_months_are_informational():
+    r = assess_credit_report(make_report(band="AA", accounts=[account(index=1, payment_history=_grid({14: 5}))]),
+                             Policy(deviation_enabled=False))
+    assert next(f for f in r["findings"] if f["code"] == "LATE_PAYMENTS")["severity"] == "informational"
+
+
+def test_no_late_payments_no_finding():
+    r = assess_credit_report(make_report(band="AA", accounts=[account(index=1, payment_history=_grid({}))]),
+                             Policy(deviation_enabled=False))
+    assert r["late_payments"]["summary"] == "No late payments in the last 24 months."
+    assert "LATE_PAYMENTS" not in {f["code"] for f in r["findings"]}
+
+
 # ------------------------------------------------------ adverse records ----
 def _cheque(date_bounced="08-Aug-2025"):
     return {"trade_sector": "Bank Sector Bureau", "cheque_date": date_bounced,

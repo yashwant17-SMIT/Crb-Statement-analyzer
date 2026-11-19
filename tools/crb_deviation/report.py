@@ -28,6 +28,7 @@ from openpyxl.utils import get_column_letter
 
 import checks
 from checks import ALLOWED, REFER, REJECT, REVIEW, TITLES, day
+from app.crb_analyzer import late_payments  # noqa: E402
 
 CODES = list(TITLES)
 MARK = {ALLOWED: "✓ Pass", REFER: "⚠ Refer", REVIEW: "? Check", REJECT: "✗ Fail"}
@@ -70,6 +71,9 @@ ACTION_TABS = ["Could be approved", "Refer", "Would be rejected", "Manual check"
 MAIN_COLUMNS = [("Intake row", 9), ("Application ID", 14), ("Customer", 24), ("CRB band", 9), ("Today", 10),
                 ("Outcome", 20), ("What it means / what to do", 45), ("Why", 90)] + \
                [(TITLES[c], 13) for c in CODES] + \
+               [("Late EMI, last 24 months", 40), ("Late months, last 12", 11), ("1-30d late, last 12", 11),
+                ("31-60d late, last 12", 11), ("61-90d late, last 12", 11), ("90+d late, last 12", 11),
+                ("Worst days late", 10), ("Most recent late", 11)] + \
                [("Loans on CRB", 16), ("Name on CRB", 26), ("National ID", 18), ("CRB report date", 20),
                 ("CRB file", 30)]
 
@@ -100,6 +104,16 @@ def why(rec: dict) -> str:
     return "\n".join(lines)
 
 
+def late_columns(rep) -> list:
+    """Late EMI payments across every loan (report only, holds nothing)."""
+    if rep is None:
+        return [""] * 8
+    lp = late_payments(rep.accounts)
+    last12 = lp["buckets"]["last_12"]
+    return [lp["summary"], lp["late_months_last_12"], last12["1-30"], last12["31-60"], last12["61-90"],
+            last12["90+"], lp["worst_days_late"] or "", lp["most_recent_late"] or ""]
+
+
 def main_row(rec: dict) -> list:
     label, _, _, meaning = OUTCOMES[rec["group"]]
     if rec["checks"] is None:
@@ -109,7 +123,7 @@ def main_row(rec: dict) -> list:
     loans = (f"{sum(a.is_open for a in rep.accounts)} open, {sum(not a.is_open for a in rep.accounts)} closed"
              if rep else "")
     return [rec["row"], rec["app_id"], rec["customer"], rec["band"], rec["today"], label, meaning, why(rec)] + \
-           [marks.get(c, "") for c in CODES] + \
+           [marks.get(c, "") for c in CODES] + late_columns(rep) + \
            [loans, rec["crb_name"], rec["national_id"], rec["report_date"], rec["file_name"] or rec["link"]]
 
 

@@ -7,7 +7,7 @@ import {
   ReviewChecklist, TransactionExplorer, Tier, LoanEligibility, CombinedAccounts, NameCheck,
 } from './components'
 import {
-  CrbExposure, CrbFindings, CrbNotes, CrbPortfolio, CrbProfile, CrbUpload, GateBanner,
+  CrbExposure, CrbFindings, CrbLatePayments, CrbNotes, CrbPortfolio, CrbProfile, CrbUpload, GateBanner,
 } from './components/crb'
 
 /**
@@ -263,6 +263,7 @@ export default function App() {
             <Tier id="bureau" label="Bureau evidence" note="From the TransUnion report">
               <CrbExposure crb={crb} />
               <CrbPortfolio crb={crb} />
+              <CrbLatePayments crb={crb} />
               <CrbFindings findings={crb.findings} />
               <CrbProfile crb={crb} identity={report?.identity_check} />
               <CrbNotes crb={crb} />

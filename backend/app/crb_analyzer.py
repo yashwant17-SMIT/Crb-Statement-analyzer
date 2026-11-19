@@ -100,6 +100,72 @@ def _recent_repayment_behavior(a: CreditAccount, months: int = 12) -> Dict[str, 
     }
 
 
+LATE_BUCKETS = (("1-30", 1, 30), ("31-60", 31, 60), ("61-90", 61, 90), ("90+", 91, None))
+
+
+def _bucket(days: int) -> str:
+    return next(name for name, lo, hi in LATE_BUCKETS if days >= lo and (hi is None or days <= hi))
+
+
+def late_payments(accounts: List[CreditAccount]) -> Dict[str, Any]:
+    """Late EMI payments across every account, open and closed, from the 24-month grids.
+
+    Report only: it holds nothing. Each grid entry is the bureau's days past due
+    for that month; non-numeric codes (no record, not open) are not counted.
+    The first 12 entries are the last 12 months (newest first, as above).
+    """
+    windows = {w: {name: 0 for name, _, _ in LATE_BUCKETS} for w in ("last_12", "months_13_24")}
+    rows, latest = [], None
+    with_history = 0
+    for a in accounts:
+        grid = a.payment_history or []
+        if any(h["status"].isdigit() for h in grid):
+            with_history += 1
+        late = [(i, h["month"], int(h["status"])) for i, h in enumerate(grid[:24])
+                if h["status"].isdigit() and int(h["status"]) > 0]
+        if not late:
+            continue
+        for i, month, days in late:
+            windows["last_12" if i < 12 else "months_13_24"][_bucket(days)] += 1
+            try:
+                when = datetime.strptime(month, "%b %y")
+            except ValueError:
+                continue
+            if latest is None or when > latest[0]:
+                latest = (when, month)
+        rows.append({
+            "index": a.index, "type": a.account_type, "trade_sector": a.trade_sector,
+            "open": a.is_open, "status": a.account_status,
+            "late_months": len(late),
+            "late_months_last_12": sum(1 for i, _, _ in late if i < 12),
+            "worst_days_late": max(d for _, _, d in late),
+            "detail": [{"month": m, "days_late": d} for _, m, d in late],
+        })
+    total = sum(r["late_months"] for r in rows)
+    worst = max((r["worst_days_late"] for r in rows), default=0)
+    if rows:
+        summary = (f"{total} late month{'s' if total != 1 else ''} across {len(rows)} "
+                   f"loan{'s' if len(rows) != 1 else ''} in the last 24 months; worst {worst} days; "
+                   f"most recent {latest[1] if latest else 'undated'}.")
+    elif with_history:
+        summary = "No late payments in the last 24 months."
+    else:
+        summary = "The report has no payment history."
+    return {
+        "accounts_with_history": with_history,
+        "accounts_late": len(rows),
+        "open_accounts_late": sum(1 for r in rows if r["open"]),
+        "closed_accounts_late": sum(1 for r in rows if not r["open"]),
+        "late_months": total,
+        "late_months_last_12": sum(windows["last_12"].values()),
+        "worst_days_late": worst,
+        "most_recent_late": latest[1] if latest else None,
+        "buckets": windows,
+        "accounts": sorted(rows, key=lambda r: (-r["worst_days_late"], -r["late_months"])),
+        "summary": summary,
+    }
+
+
 def _cheque_after_cutoff(c: Dict[str, Any], cutoff: datetime) -> bool:
     """Same rule as _after_cutoff: only a readable date before the cutoff excludes."""
     for key in ("date_bounced", "cheque_date"):
@@ -528,6 +594,15 @@ def assess_credit_report(report: ParsedCreditReport, policy: Policy) -> Dict[str
         findings.insert(0, _finding("CRB_NOTE", "Passed to statement analysis", "informational",
                                     gate["note"]))
 
+    # Late EMI payments are on the report only, never a hold.
+    late = late_payments(report.accounts)
+    if late["accounts_late"]:
+        findings.append(_finding(
+            "LATE_PAYMENTS", "Late EMI payments on file",
+            "warning" if late["late_months_last_12"] else "informational",
+            late["summary"] + " Shown for review; it does not hold the application.",
+            {"buckets": late["buckets"], "accounts": late["accounts"]}))
+
     blocking = [f for f in findings if f["severity"] == "blocking"]
     if gate["statement_parsing_allowed"] and blocking:
         gate["recommendation"] = "refer"
@@ -563,6 +638,7 @@ def assess_credit_report(report: ParsedCreditReport, policy: Policy) -> Dict[str
         "exposure": exposure,
         "summary": report.summary,
         "repayment_track_record": _track_record(report, policy),
+        "late_payments": late,
         "enquiries": _enquiry_profile(report),
         "collateral": {
             "distinct_entries": len(report.collaterals),

@@ -327,6 +327,89 @@ export function CrbExposure({ crb }) {
   )
 }
 
+/* ------------------------------------------------------- late EMI payments */
+export function CrbLatePayments({ crb }) {
+  const lp = crb.late_payments
+  if (!lp) return null
+  const b = lp.buckets || {}
+  const names = Object.keys(b.last_12 || {})
+  return (
+    <section className="panel">
+      <div className="panel__head">
+        <div>
+          <span className="eyebrow">Repayment history</span>
+          <h3 style={{ marginTop: 6 }}>Late EMI payments, last 24 months</h3>
+          <p>Every loan on the report, open and closed. Shown for review; it does not hold the application.</p>
+        </div>
+      </div>
+      <div className="panel__body">
+        <p className={lp.accounts_late ? '' : 'muted'} style={{ marginTop: 0 }}><b>{lp.summary}</b></p>
+        {lp.accounts_late > 0 && (
+          <>
+            <div className="metrics">
+              <div>
+                <span className="eyebrow">Loans paid late</span>
+                <div className="num metric__figure" data-tone="flag">{lp.accounts_late}</div>
+                <div className="metric__sub">{lp.open_accounts_late} open · {lp.closed_accounts_late} closed</div>
+              </div>
+              <div>
+                <span className="eyebrow">Late months</span>
+                <div className="num metric__figure">{lp.late_months}</div>
+                <div className="metric__sub">{lp.late_months_last_12} in the last 12 months</div>
+              </div>
+              <div>
+                <span className="eyebrow">Worst</span>
+                <div className="num metric__figure">{lp.worst_days_late}d</div>
+                <div className="metric__sub">Most recent late month: {lp.most_recent_late || '—'}</div>
+              </div>
+            </div>
+            <div className="table-scroll" style={{ marginTop: 14 }}>
+              <table>
+                <thead>
+                  <tr><th>When</th>{names.map((n) => <th className="r" key={n}>{n} days</th>)}</tr>
+                </thead>
+                <tbody>
+                  {[['last_12', 'Last 12 months'], ['months_13_24', '13–24 months ago']].map(([k, label]) => (
+                    <tr key={k}>
+                      <td>{label}</td>
+                      {names.map((n) => (
+                        <td key={n} className={`num r ${b[k]?.[n] ? 'neg' : 'muted'}`}>{b[k]?.[n] || 0}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="table-scroll" style={{ marginTop: 14 }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Loan type</th><th>Sector</th><th>Open / closed</th><th className="r">Late months</th>
+                    <th className="r">In last 12</th><th className="r">Worst</th><th>Months late</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lp.accounts.map((a) => (
+                    <tr key={a.index}>
+                      <td>{a.type}</td>
+                      <td className="muted">{a.trade_sector}</td>
+                      <td className="muted">{a.open ? 'Open' : 'Closed'}</td>
+                      <td className="num r">{a.late_months}</td>
+                      <td className={`num r ${a.late_months_last_12 ? 'neg' : 'muted'}`}>{a.late_months_last_12}</td>
+                      <td className="num r neg">{a.worst_days_late}d</td>
+                      <td className="muted">{a.detail.map((d) => `${d.month} (${d.days_late}d)`).join(', ')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+    </section>
+  )
+}
+
 /* --------------------------------------------------------------- findings */
 export function CrbFindings({ findings }) {
   const [open, setOpen] = useState(findings[0]?.code ?? null)

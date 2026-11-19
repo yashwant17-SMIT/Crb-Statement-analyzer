@@ -397,6 +397,39 @@ def _summary(lay: Layout, crb: Optional[dict], report: Optional[dict], files: di
     ])
 
 
+def _late_payments(lay: Layout, lp: Optional[dict]) -> None:
+    """Late EMI payments on every loan, open and closed. Report only."""
+    if not lp:
+        return
+    lay.section("Late EMI payments (last 24 months)")
+    lay.note(lp.get("summary"))
+    if not lp.get("accounts_late"):
+        return
+    lay.pairs([
+        ("Loans paid late", lp.get("accounts_late")),
+        ("Open / closed", f"{lp.get('open_accounts_late')} open, {lp.get('closed_accounts_late')} closed"),
+        ("Late months", lp.get("late_months")),
+        ("Late months in the last 12", lp.get("late_months_last_12")),
+        ("Worst days late", lp.get("worst_days_late")),
+        ("Most recent late month", lp.get("most_recent_late")),
+    ])
+    b = lp.get("buckets") or {}
+    names = list((b.get("last_12") or {}).keys())
+    lay.subheading("By how late")
+    lay.table(["When"] + [f"{n} days" for n in names],
+              ([label] + [(b.get(k) or {}).get(n) for n in names]
+               for k, label in (("last_12", "Last 12 months"), ("months_13_24", "13-24 months ago"))))
+    lay.subheading("Loans paid late")
+    lay.table(["Loan type", "Sector", "Open / closed", "Status", "Late months", "In last 12",
+               "Worst days late", "Months late (days)"],
+              ([a.get("type"), a.get("trade_sector"), "Open" if a.get("open") else "Closed",
+                a.get("status"), a.get("late_months"), a.get("late_months_last_12"),
+                a.get("worst_days_late"),
+                ", ".join(f"{d['month']} ({d['days_late']}d)" for d in a.get("detail") or [])]
+               for a in lp.get("accounts") or []))
+    lay.note("Shown for review only; late payments do not hold an application.")
+
+
 def _bureau(lay: Layout, crb: dict) -> None:
     g = crb.get("gate") or {}
     e = crb.get("exposure") or {}
@@ -478,6 +511,8 @@ def _bureau(lay: Layout, crb: dict) -> None:
             total=["Counted toward monthly EMI", "", "", "", "", "", "",
                    e.get("scheduled_monthly_payments"), e.get("total_arrears")],
         )
+
+    _late_payments(lay, crb.get("late_payments"))
 
     findings = crb.get("findings") or []
     lay.section("Bureau findings")
