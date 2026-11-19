@@ -31,6 +31,7 @@ from .base import (
     StatementParseError,
     Txn,
     clean,
+    page_tables,
     to_int,
     to_iso,
 )
@@ -81,8 +82,8 @@ def parse(pdf) -> ParsedStatement:
     rejected: List[RejectedRow] = []
     pages = len(pdf.pages)
 
-    for page_no, page in enumerate(pdf.pages, start=1):
-        for table in page.extract_tables():
+    for page_no, tables in page_tables(pdf):
+        for table in tables:
             for raw in table:
                 if not raw or len(raw) < _COLS:
                     continue

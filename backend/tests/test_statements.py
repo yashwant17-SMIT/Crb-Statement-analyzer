@@ -256,6 +256,9 @@ class _FakePage:
     def extract_text(self):
         return self._text
 
+    def close(self):
+        pass
+
 
 class _FakePdf:
     def __init__(self, *pages):
@@ -359,3 +362,57 @@ def test_bk_branch_wrapped_cells_rejoin_mid_word_only():
     assert _join([("MTN Push to Ba", 222), ("nk", 177)], edge) == "MTN Push to Bank"
     assert _join([("BK to BK NEW M", 225), ("OBISERVE", 206), ("JEANNE UWAYO", 227)], edge) == \
         "BK to BK NEW MOBISERVE JEANNE UWAYO"
+
+
+def _ruled_pdf(pages: int) -> bytes:
+    """A PDF with a ruled two-column table on each page, cells naming the page."""
+    objs = ["<< /Type /Catalog /Pages 2 0 R >>", None,
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    kids = []
+    for p in range(1, pages + 1):
+        grid = "".join(f"72 {y} m 372 {y} l S " for y in (700, 680, 660)) + \
+               "".join(f"{x} 700 m {x} 660 l S " for x in (72, 222, 372))
+        text = "".join(f"BT /F1 10 Tf {x} {y} Td (p{p}r{r}c{c}) Tj ET "
+                       for r, y in ((1, 686), (2, 666)) for c, x in ((1, 80), (2, 230)))
+        stream = grid + text
+        objs.append(f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream")
+        objs.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+                    f"/Resources << /Font << /F1 3 0 R >> >> /Contents {len(objs)} 0 R >>")
+        kids.append(f"{len(objs)} 0 R")
+    objs[1] = f"<< /Type /Pages /Kids [{' '.join(kids)}] /Count {pages} >>"
+    out, offsets = "%PDF-1.4\n", []
+    for i, body in enumerate(objs, start=1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n{body}\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n" + \
+        "".join(f"{o:010d} 00000 n \n" for o in offsets)
+    out += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n"
+    return out.encode("latin-1")
+
+
+def test_long_statement_tables_read_in_parallel_match_one_process(monkeypatch):
+    import io
+    import pdfplumber
+    from app.statements import base
+
+    data = _ruled_pdf(7)
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        serial = base.page_tables(pdf)
+    monkeypatch.setattr(base, "PARALLEL_FROM_PAGES", 2)
+    monkeypatch.setattr(base, "_CHUNK_PAGES", 3)
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        parallel = base.page_tables(pdf)
+    assert serial[6] == (7, [[["p7r1c1", "p7r1c2"], ["p7r2c1", "p7r2c2"]]])
+    assert parallel == serial
+
+
+def test_pages_are_let_go_once_read():
+    import io
+    import pdfplumber
+    from app.statements import base
+
+    with pdfplumber.open(io.BytesIO(_ruled_pdf(3))) as pdf:
+        for _, page in base.iter_pages(pdf):
+            page.extract_tables()
+        assert all("_objects" not in vars(p) and "_layout" not in vars(p) for p in pdf.pages)

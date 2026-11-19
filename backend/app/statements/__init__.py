@@ -17,6 +17,7 @@ from .base import (  # noqa: F401 - re-exported as the package's public types
     StatementHeader,
     StatementParseError,
     Txn,
+    page_text,
 )
 from .registry import ADAPTERS, PROVIDERS, provider_options
 
@@ -43,7 +44,7 @@ def parse_statement(data: bytes, provider: str | None = None) -> ParsedStatement
         raise StatementParseError(f"File could not be opened as a PDF: {exc}") from exc
 
     with pdf:
-        first_page = pdf.pages[0].extract_text(layout=True) if pdf.pages else ""
+        first_page = page_text(pdf, 0, layout=True)
         scored = sorted(
             ((a.sniff(first_page or ""), a) for a in ADAPTERS),
             key=lambda pair: pair[0],

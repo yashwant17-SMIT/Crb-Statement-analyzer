@@ -32,6 +32,8 @@ from .base import (
     StatementHeader,
     StatementParseError,
     Txn,
+    iter_pages,
+    page_text,
     to_int,
     to_iso,
 )
@@ -161,7 +163,7 @@ def _join(parts: List[tuple], right_edge: float) -> str:
 
 def parse(pdf) -> ParsedStatement:
     pages = len(pdf.pages)
-    header = _parse_header(pdf.pages[0].extract_text() or "") if pages else StatementHeader()
+    header = _parse_header(page_text(pdf, 0)) if pages else StatementHeader()
     txns: List[Txn] = []
     rejected: List[RejectedRow] = []
 
@@ -205,7 +207,7 @@ def parse(pdf) -> ParsedStatement:
             direction=direction,
         ))
 
-    for page_no, page in enumerate(pdf.pages, start=1):
+    for page_no, page in iter_pages(pdf):
         found = _columns(page)
         if found:
             col = found
@@ -260,7 +262,7 @@ def parse(pdf) -> ParsedStatement:
                     cur[k] = " ".join(w["text"] for w in c[k])
     flush()
 
-    last = (pdf.pages[-1].extract_text() or "") if pages else ""
+    last = page_text(pdf, -1)
     if m := re.search(r"Total Credits\s*:\s*([\d,]+)", last):
         header.total_credits = to_int(m.group(1))
     if m := re.search(r"Total Debits\s*:\s*([\d,]+)", last):

@@ -21,7 +21,8 @@ from typing import List
 
 from .base import (
     Capabilities, ParsedStatement, RejectedRow, StatementHeader,
-    StatementParseError, Txn, clean, dedupe_name, split_party, to_int, to_iso,
+    StatementParseError, Txn, clean, dedupe_name, page_tables, page_text, split_party,
+    to_int, to_iso,
 )
 
 NAME = "mtn_momo_v1"
@@ -93,11 +94,11 @@ def parse(pdf) -> ParsedStatement:
     # names and timestamp - across a page break included.
     pending: List[dict] = []
 
-    for page_no, page in enumerate(pdf.pages, start=1):
-        if page_no == 1:
-            header = _parse_header(page.extract_text() or "")
+    if pages:
+        header = _parse_header(page_text(pdf, 0))
 
-        for table in page.extract_tables():
+    for page_no, tables in page_tables(pdf):
+        for table in tables:
             for raw in table:
                 if len(raw) < 9:
                     continue

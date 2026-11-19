@@ -30,7 +30,7 @@ from typing import List, Optional
 
 from .base import (
     Capabilities, ParsedStatement, RejectedRow, StatementHeader,
-    StatementParseError, Txn, clean, dedupe_name, to_int,
+    StatementParseError, Txn, clean, dedupe_name, iter_pages, to_int,
 )
 
 NAME = "mtn_momo_portal_v1"
@@ -123,7 +123,7 @@ def parse(pdf) -> ParsedStatement:
     raw_rows: List[tuple[int, List[str]]] = []
     rejected: List[RejectedRow] = []
 
-    for page_no, page in enumerate(pdf.pages, start=1):
+    for page_no, page in iter_pages(pdf):
         for r in _page_rows(page):
             first = clean(r[_ID])
             if not first or first.lower() == "id":

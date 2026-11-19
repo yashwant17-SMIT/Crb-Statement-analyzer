@@ -36,6 +36,8 @@ from .base import (
     clean,
     dedupe_name,
     find_msisdn,
+    page_tables,
+    page_text,
     slugify,
     to_int,
     to_iso,
@@ -159,11 +161,11 @@ def parse(pdf) -> ParsedStatement:
     rejected: List[RejectedRow] = []
     pages = len(pdf.pages)
 
-    for page_no, page in enumerate(pdf.pages, start=1):
-        if page_no == 1:
-            header = _parse_header(page.extract_text(layout=True) or "")
+    if pages:
+        header = _parse_header(page_text(pdf, 0, layout=True))
 
-        for table in page.extract_tables():
+    for page_no, tables in page_tables(pdf):
+        for table in tables:
             for raw in table:
                 if not raw or len(raw) < _COLS:
                     continue

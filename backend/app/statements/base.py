@@ -7,10 +7,19 @@ which never learns which format produced the rows it is given.
 """
 from __future__ import annotations
 
+import io
+import itertools
+import logging
+import multiprocessing
+import os
 import re
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple
+
+log = logging.getLogger(__name__)
 
 Direction = Literal["in", "out"]
 
@@ -165,6 +174,82 @@ class ParsedStatement:
             f"Recovered {len(self.transactions)} of "
             f"{self.header.declared_txn_count} declared transactions."
         )
+
+
+# ------------------------------------------------------------- pages -------
+# pdfplumber keeps every page it has read, with all its characters and lines,
+# until the PDF is closed: a 1,079-page MoMo statement held 7.7 GB. Adapters
+# walk pages through these helpers, which let each page go once it is read.
+
+# Reading a page's tables is pdfminer working through its drawing
+# instructions, about 0.2 s a page, so a long statement is shared out across
+# processes. Below this many pages the start-up isn't worth it.
+PARALLEL_FROM_PAGES = 40
+_CHUNK_PAGES = 25
+_MAX_WORKERS = 8
+
+
+def iter_pages(pdf) -> Iterator[Tuple[int, Any]]:
+    """(page number from 1, page) for every page, each closed once read."""
+    for page_no, page in enumerate(pdf.pages, start=1):
+        try:
+            yield page_no, page
+        finally:
+            page.close()
+
+
+def page_text(pdf, index: int, **kwargs) -> str:
+    """One page's text, the page closed afterwards; "" for an empty PDF."""
+    if not pdf.pages:
+        return ""
+    page = pdf.pages[index]
+    try:
+        return page.extract_text(**kwargs) or ""
+    finally:
+        page.close()
+
+
+def page_tables(pdf) -> List[Tuple[int, List[List[List[Optional[str]]]]]]:
+    """(page number from 1, page.extract_tables()) for every page, in order."""
+    n = len(pdf.pages)
+    workers = min(os.cpu_count() or 1, _MAX_WORKERS, -(-n // _CHUNK_PAGES))
+    if n >= PARALLEL_FROM_PAGES and workers > 1:
+        try:
+            return _tables_in_parallel(pdf.stream, n, workers)
+        except (OSError, BrokenProcessPool) as exc:  # no processes here: read in this one
+            log.warning("Reading %d pages in one process: %s", n, exc)
+    return [(page_no, page.extract_tables()) for page_no, page in iter_pages(pdf)]
+
+
+def _tables_in_parallel(stream, n: int, workers: int):
+    stream.seek(0)
+    data = stream.read()
+    starts = range(0, n, _CHUNK_PAGES)
+    # spawn, not fork: this runs inside the server's worker threads.
+    with ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn"),
+                             initializer=_open_in_worker, initargs=(data,)) as pool:
+        chunks = pool.map(_read_tables, starts, [min(s + _CHUNK_PAGES, n) for s in starts])
+        return [(page_no, tables) for page_no, tables in
+                enumerate(itertools.chain.from_iterable(chunks), start=1)]
+
+
+_worker_pdf = None
+
+
+def _open_in_worker(data: bytes) -> None:
+    global _worker_pdf
+    import pdfplumber
+    _worker_pdf = pdfplumber.open(io.BytesIO(data))
+
+
+def _read_tables(start: int, stop: int):
+    out = []
+    for page in _worker_pdf.pages[start:stop]:
+        try:
+            out.append(page.extract_tables())
+        finally:
+            page.close()
+    return out
 
 
 # ------------------------------------------------------------- helpers -----
