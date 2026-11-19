@@ -561,7 +561,7 @@ scrolling past the section that carries it.
 
 ## Product eligibility (new customers)
 
-Net revenue is 15% of the average monthly statement net revenue less the open-PA
+Net revenue is 20% of the average monthly statement net revenue less the open-PA
 monthly EMI; the fee cap is 15% of that. The fee cap is rounded once and the sanction
 table is matched on the rounded figure, because the band bounds are whole rupees and
 matching an unrounded float put the displayed cap and the matched band out of step at
@@ -574,7 +574,7 @@ are still matched in order, so should a future table overlap, the lower sanction
 is reported as `band_overlap_resolved`.
 
 Existing Flow customers (`customer_type=existing`) go through the same steps, but net
-revenue is 18% of net inflow and the fee cap is 20% of net revenue, matched against
+revenue is 23% of net inflow and the fee cap is 20% of net revenue, matched against
 `existing_loan_eligibility_bands` (500,000 up to 3,000,000; a fee cap of 205,001 or more
 sanctions 3,000,000). The policy's gates on on-time-repayment history and completed
 facility count are not applied yet.

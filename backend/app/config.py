@@ -266,7 +266,7 @@ class Policy:
     # NEW CUSTOMER rates. Existing Flow customers use their own rates and
     # sanction table, configured below the new-customer table.
     eligibility_months: int = 3
-    net_revenue_rate: float = 0.15
+    net_revenue_rate: float = 0.20
     fee_cap_rate: float = 0.15
 
     # NEW CUSTOMER sanction table. Bounds are INCLUSIVE at both ends, matching
@@ -291,10 +291,10 @@ class Policy:
         {"min_fee_cap": 250_001, "max_fee_cap": None, "loan_amount": 2_000_000},
     ])
 
-    # EXISTING CUSTOMER rates: net revenue is 18% of the monthly average
+    # EXISTING CUSTOMER rates: net revenue is 23% of the monthly average
     # inflow (after the bureau EMI, exactly as for a new customer) and the fee
     # cap is 20% of that.
-    existing_net_revenue_rate: float = 0.18
+    existing_net_revenue_rate: float = 0.23
     existing_fee_cap_rate: float = 0.20
 
     # EXISTING CUSTOMER sanction table. Same rules as the new-customer table:

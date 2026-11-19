@@ -132,9 +132,9 @@ def test_statement_loan_eligibility_uses_three_month_average_and_crb_emi():
     assert e["average_monthly_inflow"] == 2_505_760
     assert e["average_monthly_net_revenue"] == 2_505_760
     assert e["net_inflow"] == 2_255_760
-    assert e["net_revenue"] == 338_364
-    assert e["fee_cap"] == 50_755
-    assert e["loan_amount_eligibility"] == 500_000
+    assert e["net_revenue"] == 451_152
+    assert e["fee_cap"] == 67_673
+    assert e["loan_amount_eligibility"] == 700_000
     assert e["status"] == "eligible"
 
 
@@ -155,8 +155,8 @@ def test_eligibility_deducts_only_the_ongoing_crb_emi_from_statement_net_revenue
     assert e["average_monthly_net_revenue"] == 2_505_760
     assert e["monthly_emi"] == 100_000
     assert e["net_inflow"] == 2_405_760
-    assert e["net_revenue"] == 360_864
-    assert e["fee_cap"] == 54_130
+    assert e["net_revenue"] == 481_152
+    assert e["fee_cap"] == 72_173
     assert e["monthly_emi_scope"] == "open_performing_accounts_only"
 
 def test_statement_loan_eligibility_requires_complete_emi():
@@ -182,12 +182,12 @@ def test_statement_loan_eligibility_gap_is_not_assigned():
             rows.append(txn(i, f"2026-0{month}-{10 + suffix:02d} 09:00:00", f"25078800{i:04d}", f"C{i}",
                             ACC, "Jane", 1_000_000))
             i += 1
-    # avg 3M, EMI 200K -> net inflow 2.8M -> revenue 420K -> fee cap 63K, a normal band.
+    # avg 3M, EMI 200K -> net inflow 2.8M -> revenue 560K -> fee cap 84K, a normal band.
     report = analyze(ParsedStatement(
         StatementHeader(customer="Jane DOE", msisdn=ACC, period_start="2026-01-01",
                         period_end="2026-03-31", declared_txn_count=3), rows, 1),
         Policy(), monthly_emi=200_000)
-    assert report["summary"]["loan_eligibility"]["loan_amount_eligibility"] == 600_000
+    assert report["summary"]["loan_eligibility"]["loan_amount_eligibility"] == 800_000
 
 # ------------------------------------------------------------- golden file --
 FIXTURE = os.getenv("MOMO_FIXTURE", "")
@@ -314,7 +314,7 @@ def _eligibility_at_fee_cap(fee_cap, policy=None, **kw):
     """Drive the engine to a target fee cap.
 
     fee_cap = (avg monthly net revenue - EMI) x net_revenue_rate x fee_cap_rate,
-    so with no EMI the required average is fee_cap / 0.0225.
+    so with no EMI the required average is fee_cap / 0.03.
     """
     from app.analyzer import _loan_eligibility
     policy = policy or Policy()
@@ -391,7 +391,7 @@ def test_overlapping_policy_bands_resolve_to_the_lower_sanction_and_say_so():
 
 
 def _existing_eligibility_at_fee_cap(fee_cap, emi=0, **kw):
-    """As _eligibility_at_fee_cap, on the existing-customer rates (18% x 20%)."""
+    """As _eligibility_at_fee_cap, on the existing-customer rates (23% x 20%)."""
     from app.analyzer import _loan_eligibility
     policy = Policy()
     rate = policy.existing_net_revenue_rate * policy.existing_fee_cap_rate
@@ -428,23 +428,23 @@ def test_existing_customer_sanction_table(fee_cap, sanctioned):
     assert e["status"] == ("eligible" if sanctioned else "not_eligible")
 
 
-def test_existing_customer_uses_18_and_20_percent_after_emi():
-    # avg 2,000,000 - EMI 100,000 = 1,900,000; x18% = 342,000; x20% = 68,400
-    e = _existing_eligibility_at_fee_cap(68_400, emi=100_000)
+def test_existing_customer_uses_23_and_20_percent_after_emi():
+    # avg 2,000,000 - EMI 100,000 = 1,900,000; x23% = 437,000; x20% = 87,400
+    e = _existing_eligibility_at_fee_cap(87_400, emi=100_000)
     assert e["net_inflow"] == 1_900_000
-    assert e["net_revenue"] == 342_000
-    assert e["fee_cap"] == 68_400
-    assert e["net_revenue_rate"] == 0.18 and e["fee_cap_rate"] == 0.20
-    assert e["loan_amount_eligibility"] == 700_000
+    assert e["net_revenue"] == 437_000
+    assert e["fee_cap"] == 87_400
+    assert e["net_revenue_rate"] == 0.23 and e["fee_cap_rate"] == 0.20
+    assert e["loan_amount_eligibility"] == 900_000
 
 
 def test_same_statement_prices_differently_for_new_and_existing():
     # fee cap 100,000 on new rates -> 1,000,000; the same average on existing
-    # rates gives 160,000 -> 2,000,000.
+    # rates gives 153,333 -> 2,000,000.
     new = _eligibility_at_fee_cap(100_000)
     existing = _eligibility_at_fee_cap(100_000, customer_type="existing")
     assert new["loan_amount_eligibility"] == 1_000_000
-    assert existing["fee_cap"] == 160_000
+    assert existing["fee_cap"] == 153_333
     assert existing["loan_amount_eligibility"] == 2_000_000
 
 

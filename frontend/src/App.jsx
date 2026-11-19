@@ -319,7 +319,7 @@ export default function App() {
               </div>
               {customerType === 'existing' && (
                 <div className="health-note" style={{ margin: '0 20px 18px' }}>
-                  <b>Existing customer.</b> Net revenue is 18% of net inflow and the fee cap is 20% of net revenue, against the existing-customer sanction table (up to 3,000,000 RWF).
+                  <b>Existing customer.</b> Net revenue is 23% of net inflow and the fee cap is 20% of net revenue, against the existing-customer sanction table (up to 3,000,000 RWF).
                 </div>
               )}
             </section>
