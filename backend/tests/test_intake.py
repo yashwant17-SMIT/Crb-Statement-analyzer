@@ -176,13 +176,32 @@ def _out(*, open_=True, el=None, crb_findings=(), flags=(), identity="match", pa
     (_out(flags=[("severe", "Round-tripping"), ("elevated", "Gaps")], identity="mismatch"),
      "on_hold", "Statement: Round-tripping. The statement does not belong to the CRB applicant.", 800000),
     (_out(el={"status": "not_assessed", "reason": "Only 2 of 3 months."}),
-     "on_hold", "Eligibility not assessed: Only 2 of 3 months.", None),
+     "on_hold", "No loan amount: Only 2 of 3 months.", None),
     (_out(parse_complete=False), "on_hold", "The statement could not be read in full.", 800000),
     (_out(awaiting=True), "on_hold", "No statement to assess.", None),
 ])
 def test_the_row_decision_for_the_ops_sheet(out, verdict, reason, sanctioned):
     assert intake.decision(out) == {"band": "BB", "decision": verdict, "sanctioned_amount": sanctioned,
                                     "reason": reason}
+
+
+def test_statement_problems_are_said_once_each_with_their_accounts():
+    float_ = {"code": "FLOAT_ACCOUNT", "severity": "severe"}
+    out = _out(el={"status": "not_assessed", "reason": "No sanction can be derived: ... (long)"},
+               crb_findings=[("blocking", "Parsed accounts do not match the bureau summary")])
+    out["statement"]["red_flags"] = [
+        {**float_, "title": "Not an income document — Bank of Kigali · 100084650247",
+         "account": "Bank of Kigali · 100084650247"},
+        {"code": "STATEMENT_OUT_OF_SPEC", "severity": "severe", "account": "Bank of Kigali · 100084650597",
+         "title": "Statement does not meet document policy — Bank of Kigali · 100084650597",
+         "evidence": {"generated_age_days": 16, "generated_max_age_days": 15}},
+        {**float_, "title": "Not an income document — Bank of Kigali · 100084650597",
+         "account": "Bank of Kigali · 100084650597"},
+        {"code": "PASS_THROUGH", "severity": "elevated", "title": "Circular / round-tripping"}]
+    assert intake.decision(out)["reason"] == (
+        "No loan amount: agent float account, not an income document (100084650247, 100084650597); "
+        "statement 16 days old, limit 15 (100084650597). "
+        "CRB: Parsed accounts do not match the bureau summary.")
 
 
 def test_a_deviation_refer_puts_the_points_in_the_reason():

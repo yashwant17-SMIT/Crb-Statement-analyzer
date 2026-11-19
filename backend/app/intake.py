@@ -83,9 +83,16 @@ def decision(out: dict) -> dict:
     if el.get("status") == "not_eligible":
         return row("rejected", el.get("reason") or "Not eligible on the statement.")
 
+    # The eligibility reason repeats every statement's own refusal at length;
+    # the severe findings say the same once each, so the row is built from
+    # those and the report keeps the full wording.
+    severe = [f for f in rep.get("red_flags") or [] if f.get("severity") == "severe"]
+    stops = _problems([f for f in severe if f.get("code") in REVENUE_STOPS])
+    others = _problems([f for f in severe if f.get("code") not in REVENUE_STOPS])
     reasons = []
     if el.get("status") != "eligible":
-        reasons.append(_sentence("Eligibility not assessed: " + (el.get("reason") or "see the report")))
+        why = "; ".join(stops) if stops else (el.get("reason") or "see the report")
+        reasons.append(_sentence("No loan amount: " + why))
     blocking = [f for f in crb.get("findings") or [] if f.get("severity") == "blocking"]
     # A deviation Refer says which point, account and limit, not just its title.
     referred = [f for f in blocking if f.get("code") == "DEVIATION_REFER"]
@@ -94,15 +101,38 @@ def decision(out: dict) -> dict:
     titles = [f.get("title") for f in blocking if f not in referred]
     if any(titles):
         reasons.append(_sentence("CRB: " + "; ".join(filter(None, titles))))
-    severe = [f.get("title") for f in rep.get("red_flags") or [] if f.get("severity") == "severe"]
-    if severe:
-        reasons.append(_sentence("Statement: " + "; ".join(filter(None, severe))))
+    if others or (stops and el.get("status") == "eligible"):
+        reasons.append(_sentence("Statement: " + "; ".join(others or stops)))
     if (rep.get("identity_check") or {}).get("status") == "mismatch":
         reasons.append("The statement does not belong to the CRB applicant.")
     if (rep.get("meta") or {}).get("parse_complete") is False:
         reasons.append("The statement could not be read in full.")
     sanctioned = el.get("sanctioned_amount") if el.get("status") == "eligible" else None
     return row("on_hold" if reasons else "approved", " ".join(reasons), sanctioned)
+
+
+# Statement findings that stop a revenue figure being stated for the account.
+REVENUE_STOPS = {"FLOAT_ACCOUNT", "STATEMENT_OUT_OF_SPEC"}
+
+
+def _problems(flags: list[dict]) -> list[str]:
+    """One short line per kind of finding, naming the accounts it is on."""
+    groups: dict[str, list[str]] = {}
+    for f in flags:
+        accounts = groups.setdefault(_problem(f), [])
+        number = str(f.get("account") or "").rpartition("·")[2].strip()
+        if number and number not in accounts:
+            accounts.append(number)
+    return [f"{text} ({', '.join(acc)})" if acc else text for text, acc in groups.items()]
+
+
+def _problem(f: dict) -> str:
+    ev = f.get("evidence") or {}
+    if f.get("code") == "FLOAT_ACCOUNT":
+        return "agent float account, not an income document"
+    if f.get("code") == "STATEMENT_OUT_OF_SPEC" and ev.get("generated_age_days") is not None:
+        return f"statement {ev['generated_age_days']} days old, limit {ev.get('generated_max_age_days')}"
+    return str(f.get("title") or "").partition(" — ")[0]
 
 
 def _sentence(text: str) -> str:
