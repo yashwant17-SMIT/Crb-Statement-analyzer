@@ -33,7 +33,7 @@ from starlette.datastructures import UploadFile as FormFile
 from . import intake, intake_fields, sheets
 from .analyzer import analyze
 from .combine import account_label, combine_reports, group_by_account
-from .config import DEFAULT_POLICY, Policy
+from .config import DEFAULT_POLICY, SKIP_FRESHNESS_SNOS, Policy
 from .crb_analyzer import assess_credit_report
 from .crb_parser import BAND_LADDER, CreditReportParseError, parse_credit_report
 from .statements import StatementParseError, parse_statement, provider_options
@@ -695,7 +695,11 @@ async def intake_assess(request: Request):
     except intake.StateError as exc:
         raise HTTPException(status_code=400, detail={"error": "invalid_results_state", "message": str(exc)})
 
-    policy = Policy()
+    # A row listed in config.SKIP_FRESHNESS_SNOS is re-run on files already
+    # judged: the 15-day age limits on the bureau report and the statements
+    # are lifted for it, and the result says so. Everything else is as live.
+    waived = str(form.get("sno") or "").strip() in SKIP_FRESHNESS_SNOS
+    policy = Policy(crb_max_age_days=100_000, statement_max_age_days=100_000) if waived else Policy()
     out, bureau = assess_bureau(crb_file.filename, await _read_pdf(crb_file), policy)
     if out["credit_bureau"]["gate"]["statement_parsing_allowed"]:
         out = assess_statements(out, bureau, await _read_statements(statement_files), [prov or ""],
@@ -703,7 +707,10 @@ async def intake_assess(request: Request):
 
     files = {"crb": crb_file.filename,
              "statement": ", ".join(f.filename for f in statement_files)}
-    return intake.for_sheet(out, files, tabs, register)
+    body = intake.for_sheet(out, files, tabs, register)
+    if waived:
+        body["result"] += " (freshness check waived)"
+    return body
 
 
 @app.get("/api/v1/providers")

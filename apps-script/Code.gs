@@ -36,6 +36,7 @@ var DATE_FORMAT = 'yyyy-mm-dd hh:mm';
 // Exact header names, compared without case, spaces or punctuation.
 var FIELDS = {
   customer: ['customer', 'customername', 'name', 'applicant', 'applicantname'],
+  sno: ['sno', 'slno', 'serialno', 'serialnumber'],
   crb: ['crb', 'crblink', 'crbreport', 'crbreportlink', 'crburl', 'crbpdf',
         'bureaureport', 'creditreport', 'creditbureaureport'],
   customer_type: ['customertype', 'type'],
@@ -201,6 +202,7 @@ function assessRow_(ctx, n) {
       crb_file: pdf_(row.crb),
     };
     row.statements.forEach(function (link, i) { payload['statement_file_' + (i + 1)] = pdf_(link); });
+    if (row.sno) payload.sno = row.sno;  // the server's SKIP_FRESHNESS_SNOS is matched on it
     payload.results_state = JSON.stringify(resultsState_(ctx.cfg));
 
     var res;
@@ -404,6 +406,7 @@ function readRow_(ctx, n) {
     customerType: String(ctx.display[i][c.customer_type]).trim(),
     amount: typeof amount === 'number' ? String(amount) : String(ctx.display[i][c.requested_amount]).trim(),
     provider: c.provider == null ? '' : String(ctx.display[i][c.provider]).trim(),
+    sno: c.sno == null ? '' : String(ctx.display[i][c.sno]).trim(),
   };
 }
 

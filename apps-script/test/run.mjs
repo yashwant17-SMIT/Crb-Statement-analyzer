@@ -394,6 +394,14 @@ const tests = {
     assert.match(h.intake.cells[3][at].value, /^Done /)
   },
 
+  'each row sends its S.No'() {
+    const header = ['S.No', ...HEADER]
+    const h = harness({ rows: [header, ['229', ...row()], ['230', ...row({ name: 'Second' })]], files: FILES,
+                        respond: () => ({ code: 200, body: OK }) })
+    h.ctx.assessPending()
+    assert.deepEqual(h.fetches.map((f) => f.opts.payload.sno), ['229', '230'])
+  },
+
   'a Drive smart chip is read through the Sheets API'() {
     const h = harness({ rows: [HEADER, row({ crb: 'crb.pdf' })], files: FILES, respond: () => ({ code: 200, body: OK }) })
     const chips = []

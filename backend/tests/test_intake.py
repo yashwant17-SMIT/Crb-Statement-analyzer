@@ -111,6 +111,22 @@ def test_a_blocked_row_never_parses_its_statements(engine):
     assert body["status"] == "Blocked at CRB"
 
 
+@pytest.mark.parametrize("sno,ages,note", [
+    (None, (15, 15), False),
+    ("229", (15, 15), False),
+    (" 230 ", (100_000, 100_000), True),
+])
+def test_a_listed_row_is_assessed_without_the_freshness_limits(engine, monkeypatch, sno, ages, note):
+    engine["gate"](True)
+    monkeypatch.setattr(m, "SKIP_FRESHNESS_SNOS", ["230"])
+    seen = {}
+    monkeypatch.setattr(m, "assess_credit_report", lambda report, policy: (
+        seen.update(ages=(policy.crb_max_age_days, policy.statement_max_age_days)) or json.loads(json.dumps(CRB))))
+    body = post(**({"sno": sno} if sno else {})).json()
+    assert seen["ages"] == ages
+    assert body["result"].endswith("(freshness check waived)") is note
+
+
 @pytest.mark.parametrize("field,value,message", [
     ("customer_type", "", "Customer type is empty"),
     ("requested_amount", "about 1M", "Requested amount"),
