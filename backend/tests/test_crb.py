@@ -688,6 +688,29 @@ def test_write_off_is_one_finding_not_one_per_topic():
     assert wo["evidence"]["accounts"][0]["index"] == 1 and wo["evidence"]["accounts"][0]["npa"]
 
 
+def test_a_written_off_tax_debt_is_reported_but_not_counted_by_the_points():
+    tax = account(index=1, trade_sector="Taxation", account_status="WRITTEN OFF", classification="WRITE OFF",
+                  is_non_performing=True, listing_date="13-Jun-2025", arrears_amount=195_615,
+                  balance_amount=195_615, days_in_arrears=0)
+    r = assess_credit_report(make_report(band="AA", accounts=[tax, account(index=2)]), Policy())
+    assert set(_points(r).values()) == {"allowed"}
+    assert r["gate"]["decision"] == "proceed" and "Taxation" not in r["gate"]["reason"]
+    codes = {f["code"]: f for f in r["findings"]}
+    assert "WRITE_OFF" not in codes and not {"NPA", "ARREARS", "ADVERSE_CLASSIFICATION"} & set(codes)
+    assert codes["TAX_WRITE_OFF"]["severity"] == "informational"
+    assert codes["TAX_WRITE_OFF"]["evidence"]["accounts"][0]["index"] == 1
+
+
+def test_a_tax_debt_beside_a_written_off_loan_leaves_the_loan_to_d4():
+    tax = account(index=1, trade_sector="Taxation", account_status="WRITTEN OFF", classification="WRITE OFF",
+                  is_non_performing=True, listing_date="13-Jun-2025", arrears_amount=195_615)
+    loan = account(index=2, account_status="WRITTEN OFF", classification="WRITE OFF",
+                   is_non_performing=True, listing_date="13-Jun-2025", arrears_amount=195_615)
+    r = assess_credit_report(make_report(band="AA", accounts=[tax, loan]), Policy())
+    assert _points(r)["D4"] == "reject"
+    assert "Account #2" in r["gate"]["reason"] and "Account #1" not in r["gate"]["reason"]
+
+
 def test_write_off_leaves_other_accounts_in_their_findings():
     accts = [account(index=1, account_status="WRITTEN OFF", classification="WRITE OFF",
                      is_non_performing=True, listing_date="13-Jun-2025", arrears_amount=50_000),

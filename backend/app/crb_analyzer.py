@@ -226,10 +226,13 @@ def _fold_write_offs(findings: List[Dict[str, Any]], report: ParsedCreditReport,
     Credit policy: a loan that is both an NPA and written off is a write-off.
     Its accounts leave the other account findings (a finding left with no
     current account is dropped) and are listed once under WRITE_OFF, with the NPA details beneath.
+    A written-off tax debt leaves them the same way but is listed under
+    TAX_WRITE_OFF, for information: the deviation points do not count it.
     """
     written_off = {a.index for a in report.accounts if deviation.is_write_off(a)}
     if not written_off:
         return findings
+    taxes = [a for a in report.accounts if a.index in written_off and deviation.is_tax(a)]
     out = []
     for f in findings:
         ev = f["evidence"]
@@ -243,11 +246,20 @@ def _fold_write_offs(findings: List[Dict[str, Any]], report: ParsedCreditReport,
                 ev.update({k: v or None for k, v in kept.items()})
                 f["detail"] += " Written-off accounts are listed under Written-off loans instead."
         out.append(f)
+    if taxes:
+        out.insert(0, _finding(
+            "TAX_WRITE_OFF", "Written-off tax debt (not a loan)", "informational",
+            f"{len(taxes)} tax debt(s) listed by the revenue authority, written off, arrears "
+            f"{sum(a.arrears_amount for a in taxes):,.0f} RWF. Not a loan, so not counted by the "
+            "deviation points.",
+            {"accounts": [{"index": a.index, "listing_date": a.listing_date,
+                           "arrears": round(a.arrears_amount)} for a in taxes]}))
     d4 = next(c for c in dev["checks"] if c["code"] == "D4")
-    out.insert(0, _finding("WRITE_OFF", "Written-off loans", "warning",
-                           f"{d4['summary']} Ruled on by deviation point D4.",
-                           {"accounts": [{"index": x["account"], "result": x["result"], "detail": x["text"],
-                                          "npa": x["details"] or None} for x in d4["findings"]]}))
+    if d4["findings"]:
+        out.insert(0, _finding("WRITE_OFF", "Written-off loans", "warning",
+                               f"{d4['summary']} Ruled on by deviation point D4.",
+                               {"accounts": [{"index": x["account"], "result": x["result"], "detail": x["text"],
+                                              "npa": x["details"] or None} for x in d4["findings"]]}))
     return out
 
 

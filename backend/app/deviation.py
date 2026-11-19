@@ -24,6 +24,10 @@ arrears unless stated; only loans listed since the cutoff count, except D4.
                                  otherwise principal <= 75,000 and cleared at least
                                  6 months before today: Allowed; anything else: Reject
 
+A tax debt is not a loan: an account in the Taxation trade sector (tax
+arrears the revenue authority lists with the bureau) is left out of every
+point and only reported.
+
 A write-off takes precedence: a written-off loan that is also an open or
 closed NPA is judged under D4 only, with its NPA details listed beneath it.
 The report has no clearance date; D5 works one out from the last payment
@@ -32,7 +36,7 @@ loan that prints no terms (see _cleared).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -97,6 +101,11 @@ def _after_cutoff(a: CreditAccount, cutoff: datetime) -> bool:
 def is_write_off(a: CreditAccount) -> bool:
     text = _norm(a.account_status) + " | " + _norm(a.classification)
     return any(w in text for w in WRITE_OFF)
+
+
+def is_tax(a: CreditAccount) -> bool:
+    """A tax debt the revenue authority listed with the bureau, not a loan."""
+    return "TAXATION" in _norm(a.trade_sector)
 
 
 def is_npa(a: CreditAccount) -> bool:
@@ -316,6 +325,7 @@ def d5_closed_npa(report: ParsedCreditReport, cutoff: datetime, policy: Policy,
 def run_checks(report: ParsedCreditReport, policy: Policy, adverse: List[str],
                today: Optional[datetime] = None) -> List[Check]:
     cutoff = datetime.strptime(policy.crb_history_cutoff, "%Y-%m-%d")
+    report = replace(report, accounts=[a for a in report.accounts if not is_tax(a)])
     return [d1_fraud_cheques(adverse), d2_open_performing(report, cutoff, policy),
             d3_open_npa(report, cutoff, policy), d4_write_off(report, cutoff, policy),
             d5_closed_npa(report, cutoff, policy, today)]
