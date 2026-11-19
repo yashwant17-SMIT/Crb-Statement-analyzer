@@ -675,6 +675,12 @@ def _portfolio(report, open_pa: List, open_npa: List) -> Dict[str, Any]:
         return (v.get("your_sector") or 0) + (v.get("other_sectors") or 0)
 
     pa_value = sum(a.balance_amount for a in open_pa)
+    # An EARLY SETTLEMENT loan is closed here: its balance is nil and its
+    # scheduled payment is history, so it stays out of the EMI. The bureau's
+    # summary still counts it under Open PA (PAID UP it counts as closed), so
+    # the count checks follow the bureau.
+    settled = [a for a in report.accounts
+               if not a.is_open and "EARLY SETTLEMENT" in " ".join((a.account_status or "").upper().split())]
     npa_value = sum(a.balance_amount for a in open_npa)
     stated_pa_count, stated_npa_count = stated("open_pa"), stated("open_npa")
     stated_pa_value, stated_npa_value = stated("pa_open_total_value"), stated("npa_open_total_value")
@@ -693,11 +699,12 @@ def _portfolio(report, open_pa: List, open_npa: List) -> Dict[str, Any]:
                        "bureau_summary": round(declared),
                        "matches": abs(parsed - declared) <= tolerance})
 
-    check("open_performing_accounts", len(open_pa), stated_pa_count, 0)
+    check("open_performing_accounts", len(open_pa) + len(settled), stated_pa_count, 0)
     check("open_non_performing_accounts", len(open_npa), stated_npa_count, 0)
     check("open_performing_value", pa_value, stated_pa_value)
     check("open_non_performing_value", npa_value, stated_npa_value)
-    check("closed_accounts", len(report.accounts) - len(open_pa) - len(open_npa), stated_closed, 0)
+    check("closed_accounts", len(report.accounts) - len(open_pa) - len(open_npa) - len(settled),
+          stated_closed, 0)
 
     mismatched = [c for c in checks if c["matches"] is False]
 

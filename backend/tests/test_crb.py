@@ -1013,3 +1013,21 @@ def test_no_hit_summary_is_recognised_but_an_unread_summary_is_not():
 def test_paid_up_and_settled_accounts_are_closed(status, is_open):
     from app.crb_parser import is_open_status
     assert is_open_status(status) is is_open
+
+
+
+def test_an_early_settled_loan_counts_open_in_the_bureau_check_but_not_in_the_emi():
+    """The bureau's summary counts EARLY SETTLEMENT under Open PA; PAID UP it counts as closed."""
+    summary = {"open_pa": {"your_sector": 0.0, "other_sectors": 2.0},
+               "pa_open_total_value": {"your_sector": 0.0, "other_sectors": 500_000.0},
+               "closed_pa": {"your_sector": 0.0, "other_sectors": 2.0},
+               "closed_npa": {"your_sector": 0.0, "other_sectors": 0.0}}
+    accts = [account(index=1, scheduled_payment=100_000, scheduled_payment_available=True),
+             account(index=2, account_status="EARLY SETTLEMENT", balance_amount=0, is_open=False,
+                     scheduled_payment=327_000, scheduled_payment_available=True),
+             account(index=3, account_status="PAID UP", balance_amount=0, is_open=False),
+             account(index=4, account_status="ACCOUNT CLOSED", balance_amount=0, is_open=False)]
+    r = assess_credit_report(make_report(accounts=accts, summary=summary), Policy())
+    assert r["exposure"]["portfolio"]["reconciles"] is True, r["exposure"]["portfolio"]["checks"]
+    assert "SUMMARY_MISMATCH" not in {f["code"] for f in r["findings"]}
+    assert r["exposure"]["scheduled_monthly_payments"] == 100_000
