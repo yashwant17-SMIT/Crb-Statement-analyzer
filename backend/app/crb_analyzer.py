@@ -861,10 +861,11 @@ def _findings(report, policy, open_accounts, exposure, gate) -> List[Dict[str, A
             },
         ))
 
-    # Exposure against the cap.
+    # Exposure against the cap. Flagged on the report, never holds an
+    # application for now: the EMI of these loans is already deducted.
     if exposure["cap_breached"]:
         f.append(_finding(
-            "CAP_BREACH", "Existing exposure exceeds the credit cap", "blocking",
+            "CAP_BREACH", "Existing exposure exceeds the credit cap", "warning",
             f"{exposure['total_open_balance']:,} RWF is outstanding across "
             f"{exposure['open_account_count']} open accounts against a cap of "
             f"{policy.credit_cap:,} RWF - "
@@ -952,12 +953,11 @@ def _findings(report, policy, open_accounts, exposure, gate) -> List[Dict[str, A
 
     # Score / reality divergence - the trap this whole module exists to catch.
     # Arrears and days late count only accounts listed on or after the history
-    # cutoff; the cap is today's exposure and counts every open account.
+    # cutoff. A cap breach alone does not count: CAP_BREACH flags it.
     worst = max((a.days_in_arrears for a in open_recent if a.days_in_arrears_reported),
                 default=None)
     if gate.get("statement_parsing_allowed") and (
-        exposure["cap_breached"]
-        or (worst is not None and worst >= policy.max_days_in_arrears)
+        (worst is not None and worst >= policy.max_days_in_arrears)
         # Days in arrears is frequently absent on non-performing blocks in this
         # format. Real arrears against a flattering band is the same divergence.
         or recent_arrears_total > policy.max_arrears_refer
@@ -965,7 +965,7 @@ def _findings(report, policy, open_accounts, exposure, gate) -> List[Dict[str, A
         f.append(_finding(
             "SCORE_DIVERGENCE", "Band does not reflect the account detail", "blocking",
             f"Band {report.band} with a stated {report.probability_of_default}% default "
-            "probability sits alongside real arrears and cap breach. The band is a "
+            "probability sits alongside real arrears. The band is a "
             "population ranking, flattered here by a long tail of small closed "
             "facilities. Do not approve on the band alone.",
             {"band": report.band, "score": report.score,

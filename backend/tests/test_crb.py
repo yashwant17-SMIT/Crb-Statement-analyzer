@@ -105,7 +105,17 @@ def test_band_alone_does_not_approve_a_delinquent_file():
     assert r["gate"]["statement_parsing_allowed"] is True      # band opens the gate
     assert r["gate"]["recommendation"] == "refer"              # but do not approve
     codes = {f["code"] for f in r["findings"] if f["severity"] == "blocking"}
-    assert {"CAP_BREACH", "ARREARS", "DELINQUENT", "SCORE_DIVERGENCE"} <= codes
+    assert {"ARREARS", "DELINQUENT", "SCORE_DIVERGENCE"} <= codes
+    assert "CAP_BREACH" in {f["code"] for f in r["findings"] if f["severity"] == "warning"}
+
+
+def test_cap_breach_alone_is_flagged_but_does_not_hold():
+    accts = [account(balance_amount=5_000_000, arrears_amount=0, days_in_arrears=0)]
+    r = assess_credit_report(make_report(band="AA", accounts=accts), Policy(deviation_enabled=False))
+    flags = {f["code"]: f["severity"] for f in r["findings"]}
+    assert flags.get("CAP_BREACH") == "warning"
+    assert "SCORE_DIVERGENCE" not in flags
+    assert r["gate"]["recommendation"] == "proceed"
 
 
 def test_clean_file_produces_no_blocking_findings():
