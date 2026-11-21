@@ -24,13 +24,14 @@ except where a rule says otherwise. Amounts are arrears unless stated.
 | D1 | Fraud / bounced cheque | None | – | Any fraud case; any bounced cheque since the cutoff |
 | D2 | Open performing loans | Up to 15 days and ≤ RWF 150,000; 16–90 days and ≤ RWF 50,000 | 16–90 days, ≤ RWF 75,000 | Anything beyond |
 | D3 | Open NPA (or > 90 days overdue) | Arrears ≤ RWF 75,000 | – | Arrears > RWF 75,000 |
-| D4 | Write-off before 2024 | At least 10 loans current and within terms since | – | Fewer than 10 |
+| D4 | Write-off before 2024 | Always; flagged for review with fewer than 10 loans current and within terms since | – | – |
 | D4 | Write-off since 2024 | – | Arrears ≤ RWF 75,000 | Arrears > RWF 75,000 |
-| D5 | Closed NPA | Cleared before 2024; or cleared after, principal ≤ RWF 75,000 and at least 6 months ago | – | Cleared after, principal > RWF 75,000 or less than 6 months ago |
+| D5 | Closed NPA | Term and clearance both ended before 1 Jan 2026; or principal ≤ RWF 75,000 | – | Ended on or after 1 Jan 2026, principal > RWF 75,000 |
 
 - A written-off NPA counts under D4 only, with its NPA details beneath it.
-- D5: cleared is the last payment date, or else listing date + repayment term, or for a
+- D5: cleared is the last payment date; the term ends at listing date + repayment term, or for a
   mobile loan that prints no terms, listing date + 30 days (`deviation_d5_mobile_loan_days`).
+  Both must be before `deviation_d5_cleared_by`; with only one on the report, that one decides.
   A loan listed since the cutoff was cleared after it. With neither, it is **Review**.
 - A customer passes only when every point is Allowed. The overall result is the
   worst point, in the order Allowed, Refer, Review, Reject.

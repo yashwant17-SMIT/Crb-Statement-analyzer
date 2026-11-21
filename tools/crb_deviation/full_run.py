@@ -44,22 +44,9 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
 
 from report import AMBER, GREEN, RED, _fill, _table
-from app import deviation, intake, intake_fields, sheets  # noqa: E402
+from app import intake, intake_fields, sheets  # noqa: E402
 from app.config import Policy  # noqa: E402
-from app.crb_analyzer import _report_datetime  # noqa: E402
 from app.main import MAX_STATEMENT_FILES, assess_bureau, assess_statements  # noqa: E402
-
-# D5's "cleared at least 6 months ago" counts back from today in live Ledger.
-# These reports were pulled when the customer applied, months ago, so here it
-# counts back from each report's own date instead.
-_d5_live = deviation.d5_closed_npa
-
-
-def _d5_as_of_report(report, cutoff, policy, today=None):
-    return _d5_live(report, cutoff, policy, today or _report_datetime(report.report_date))
-
-
-deviation.d5_closed_npa = _d5_as_of_report
 
 HERE = Path(__file__).resolve().parent
 RESULTS = HERE / "cache" / "full_run_results.json"
@@ -444,8 +431,7 @@ def write_workbook(records: List[dict], info: dict, reports_url: str, path: Path
         ws.append(list(line))
     ws.append([])
     ws.append(["Note", "", "The CRB reports and statements were pulled months ago, so the 15-day age limit on "
-                           "them was not applied, and D5's 6 months are counted back from each CRB report's date (when "
-                           "the customer applied), not from today. Everything else is as live Ledger decides."])
+                           "them was not applied. Everything else is as live Ledger decides."])
     ws.merge_cells("A2:C2")
     ws.row_dimensions[2].height = 45
     for row in ws.iter_rows():

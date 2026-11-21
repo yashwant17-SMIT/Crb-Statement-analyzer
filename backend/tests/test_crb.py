@@ -661,12 +661,21 @@ def _write_off(listed, arrears, good=0, band="GG"):
 
 @pytest.mark.parametrize("listed,arrears,good,result", [
     ("01-Mar-2019", 900_000, 10, "allowed"),  # before the cutoff, 10 good loans since
-    ("01-Mar-2019", 900_000, 9, "reject"),    # before the cutoff, too few
+    ("01-Mar-2019", 900_000, 9, "allowed"),   # before the cutoff, too few: flagged, not held
     ("13-Jun-2025", 75_000, 0, "refer"),      # since the cutoff, within the limit
     ("13-Jun-2025", 195_615, 0, "reject"),    # since the cutoff, above it (the PDF's example)
 ])
 def test_d4_write_off(listed, arrears, good, result):
     assert _points(_write_off(listed, arrears, good))["D4"] == result
+
+
+def test_d4_old_write_off_with_too_few_good_loans_is_flagged_not_held():
+    r = _write_off("01-Mar-2019", 900_000, 9)
+    d4 = next(c for c in r["gate"]["deviation"]["checks"] if c["code"] == "D4")
+    assert "flagged for review" in d4["summary"] and "flagged for review" in d4["findings"][0]["text"]
+    assert r["gate"]["decision"] == "proceed"
+    wo = next(f for f in r["findings"] if f["code"] == "WRITE_OFF")
+    assert wo["severity"] == "warning" and "flagged for review" in wo["detail"]
 
 
 def test_write_off_takes_precedence_over_npa():
@@ -722,16 +731,17 @@ def test_write_off_leaves_other_accounts_in_their_findings():
 
 
 @pytest.mark.parametrize("listed,last,terms,principal,result", [
-    ("01-Jan-2021", "01-Dec-2022", 12, 900_000, "allowed"),  # matured and cleared before Jan 2024
-    ("01-Jan-2023", "01-Oct-2024", 12, 75_000, "allowed"),   # cleared after, loan at the limit, long ago
-    ("01-Jan-2023", "01-Oct-2024", 12, 75_001, "reject"),    # cleared after, loan above it
-    ("01-Jan-2023", "01-Jun-2023", 24, 900_000, "allowed"),  # cleared early, term ran past the cutoff
+    ("01-Jan-2021", "01-Dec-2022", 12, 900_000, "allowed"),  # matured Jan 2022, cleared before Jan 2026 (the PDF's example)
+    ("01-Jan-2023", "01-Oct-2025", 12, 900_000, "allowed"),  # both ended before Jan 2026, any size
+    ("01-Jan-2023", "01-Oct-2026", 36, 900_000, "reject"),   # matures Jan 2026, cleared Oct 2026 (the PDF's example)
+    ("01-Jan-2023", "01-Oct-2026", 36, 75_000, "allowed"),   # the same at the limit
+    ("01-Jan-2023", "01-Jun-2025", 48, 900_000, "reject"),   # cleared early, but the term runs past Jan 2026
+    ("01-Jan-2023", "01-Jan-2026", 12, 75_001, "reject"),    # cleared on the date itself
     ("01-Jan-2021", "01-Jun-2022", None, 900_000, "allowed"),  # cleared before, term unknown
-    ("01-Mar-2024", None, None, 75_001, "reject"),           # no dates, listed since the cutoff, above the limit
-    ("01-Mar-2024", None, None, 50_000, "review"),           # the same, small: can't tell if 6 months ago
-    ("01-Jan-2021", None, 12, 900_000, "allowed"),           # no payment date, term ended 2022
-    ("01-Jan-2023", None, 24, 50_000, "allowed"),            # no payment date, term ended Jan 2025
-    ("01-Jan-2021", None, None, 900_000, "review"),          # nothing to date the clearance by
+    ("01-Mar-2026", None, None, 75_001, "reject"),           # no dates, listed since Jan 2026, above the limit
+    ("01-Jan-2023", None, 24, 900_000, "allowed"),           # no payment date, term ended Jan 2025
+    ("01-Jan-2021", None, None, 900_000, "review"),          # nothing to date it by, above the limit
+    ("01-Jan-2021", None, None, 50_000, "allowed"),          # nothing to date it by, small either way
 ])
 def test_d5_closed_npa(listed, last, terms, principal, result):
     r = _gate(is_open=False, classification="LOSS", is_non_performing=True, listing_date=listed,
@@ -740,43 +750,24 @@ def test_d5_closed_npa(listed, last, terms, principal, result):
     assert _points(r)["D5"] == result
 
 
-@pytest.mark.parametrize("last,result", [
-    ("01-May-2026", "allowed"),   # exactly 6 months before 1 Nov 2026
-    ("02-May-2026", "reject"),    # a day short of 6 months
-    ("01-Jan-2024", "allowed"),   # on the cutoff, long ago
-])
-def test_d5_small_npa_needs_six_months_since_clearance(last, result):
-    from app import deviation
-    a = account(is_open=False, classification="LOSS", is_non_performing=True, listing_date="01-Jan-2023",
-                last_payment_date=last, principal_amount=50_000, balance_amount=0, arrears_amount=0)
-    check = deviation.d5_closed_npa(make_report(band="GG", accounts=[a]), datetime(2024, 1, 1), Policy(),
-                                    today=datetime(2026, 11, 1))
-    assert check.result == result
+def test_d5_date_is_a_policy_field():
+    r = _gate(policy=Policy(deviation_d5_cleared_by="2024-01-01"), is_open=False, classification="LOSS",
+              is_non_performing=True, listing_date="01-Jan-2023", last_payment_date="01-Oct-2025",
+              repayment_terms="12 MONTHLY", repayment_term_months=12, principal_amount=900_000)
+    assert _points(r)["D5"] == "reject"
 
 
 @pytest.mark.parametrize("listed,principal,result", [
-    ("15-Nov-2023", 900_000, "allowed"),  # 30 days on is 15 Dec 2023, before the cutoff
-    ("15-Dec-2023", 50_000, "allowed"),   # ends 14 Jan 2024, small and long ago
-    ("15-Dec-2023", 75_001, "reject"),    # ends after the cutoff, above the limit
-    ("15-Jun-2026", 50_000, "reject"),    # ends 15 Jul 2026, under 6 months before 1 Nov 2026
+    ("15-Nov-2025", 900_000, "allowed"),  # 30 days on is 15 Dec 2025, before Jan 2026
+    ("15-Dec-2025", 900_000, "reject"),   # ends 14 Jan 2026, above the limit
+    ("15-Jun-2026", 50_000, "allowed"),   # ends after, small
 ])
 def test_d5_mobile_loan_without_terms_runs_30_days_from_listing(listed, principal, result):
     from app import deviation
     a = account(account_type="MOBILE LOAN", is_open=False, classification="Normal Risk", is_non_performing=True,
                 listing_date=listed, repayment_terms="", principal_amount=principal, balance_amount=0,
                 arrears_amount=0)
-    check = deviation.d5_closed_npa(make_report(band="GG", accounts=[a]), datetime(2024, 1, 1), Policy(),
-                                    today=datetime(2026, 11, 1))
-    assert check.result == result
-
-
-def test_d5_other_loan_without_terms_is_still_review():
-    from app import deviation
-    a = account(is_open=False, classification="LOSS", is_non_performing=True, listing_date="15-Nov-2021",
-                repayment_terms="", principal_amount=50_000, balance_amount=0, arrears_amount=0)
-    check = deviation.d5_closed_npa(make_report(band="GG", accounts=[a]), datetime(2024, 1, 1), Policy(),
-                                    today=datetime(2026, 11, 1))
-    assert check.result == "review"
+    assert deviation.d5_closed_npa(make_report(band="GG", accounts=[a]), Policy()).result == result
 
 
 def test_refer_assesses_the_statement_but_holds_for_the_approving_authority():
@@ -950,6 +941,55 @@ def test_no_late_payments_no_finding():
                              Policy(deviation_enabled=False))
     assert r["late_payments"]["summary"] == "No late payments in the last 24 months."
     assert "LATE_PAYMENTS" not in {f["code"] for f in r["findings"]}
+
+
+# -------------------------------------------------------- bureau flags ----
+def _codes(r) -> dict:
+    return {f["code"]: f for f in r["findings"]}
+
+
+@pytest.mark.parametrize("grids,flagged", [
+    ([{2: 2}, {9: 3}, {20: 2}], True),           # 3 accounts with a month 2+ days late
+    ([{2: 2}, {9: 3}, {20: 1}], False),          # the third only 1 day late
+    ([{15: 30}], True),                          # worst arrear 30+ days
+    ([{15: 29}], False),
+    ([{1: 2, 4: 30}], True),                     # 2 instalments 2-30 days late in 6 months
+    ([{1: 2, 7: 29}], False),                    # the second outside the 6 months
+])
+def test_arrear_markers_flag(grids, flagged):
+    accts = [account(index=i + 1, payment_history=_grid(g)) for i, g in enumerate(grids)]
+    r = assess_credit_report(make_report(band="AA", accounts=accts), Policy())
+    assert ("ARREAR_MARKERS" in _codes(r)) is flagged
+    if flagged:
+        assert _codes(r)["ARREAR_MARKERS"]["severity"] == "warning"
+        assert r["gate"]["recommendation"] == "proceed", "report only, never a hold"
+
+
+def test_tax_debts_do_not_count_toward_the_flags():
+    accts = [account(index=i + 1, trade_sector="Taxation", payment_history=_grid({2: 40})) for i in range(3)]
+    r = assess_credit_report(make_report(band="AA", accounts=accts + [account(index=9)]), Policy())
+    assert "ARREAR_MARKERS" not in _codes(r)
+
+
+@pytest.mark.parametrize("n,flagged", [(10, True), (9, False)])
+def test_loan_stacking_flag(n, flagged):
+    listed = (datetime.now() - timedelta(days=59)).strftime("%d-%b-%Y")
+    accts = [account(index=i + 1, listing_date=listed, principal_amount=20_000) for i in range(n)]
+    accts.append(account(index=99, listing_date=(datetime.now() - timedelta(days=61)).strftime("%d-%b-%Y")))
+    r = assess_credit_report(make_report(band="AA", accounts=accts), Policy())
+    assert ("LOAN_STACKING" in _codes(r)) is flagged
+    if flagged:
+        f = _codes(r)["LOAN_STACKING"]
+        assert f["evidence"]["total_principal"] == n * 20_000 and len(f["evidence"]["accounts"]) == n
+        assert r["gate"]["recommendation"] == "proceed"
+
+
+@pytest.mark.parametrize("last_30,flagged", [(5, True), (4, False)])
+def test_enquiry_flag_counts_the_last_30_days(last_30, flagged):
+    summary = {"enquiries_-_last_30_days": {"your_sector": 1, "other_sectors": last_30 - 1},
+               "enquiries_-_last_31_-_60_days": {"your_sector": 9, "other_sectors": 9}}
+    r = assess_credit_report(make_report(band="AA", accounts=[account()], summary=summary), Policy())
+    assert ("ENQUIRY_VELOCITY" in _codes(r)) is flagged
 
 
 # ------------------------------------------------------ adverse records ----

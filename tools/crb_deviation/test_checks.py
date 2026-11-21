@@ -190,7 +190,7 @@ def scored(band, accounts, n):
 
 def test_the_workbook_has_the_ops_tabs_and_explains_each_row(tmp_path):
     from openpyxl import load_workbook
-    late = closed_npa("15-Jan-2023", 12, "20-Sep-2024")
+    late = closed_npa("15-Jan-2025", 12, "20-Sep-2026")
     recs = [scored("FF", [acct()], 3), scored("GG", [late], 4), scored("BB", [acct(days_in_arrears=30, arrears_amount=60_000)], 5),
             run.cannot(run.empty_record(6), CannotAssess("No access to the CRB file", "not shared", "request access")),
             scored(None, [acct()], 7)]
@@ -202,7 +202,7 @@ def test_the_workbook_has_the_ops_tabs_and_explains_each_row(tmp_path):
     allc = {r[0]: r for r in wb["All customers"].iter_rows(min_row=2, values_only=True)}
     assert allc[3][5] == "Could be approved" and allc[3][7].startswith("Passes all 5 checks:")
     assert allc[4][5] == "Stays rejected"
-    assert "✗ Fail – Closed NPA" in allc[4][7] and "last payment Sep 2024" in allc[4][7]
+    assert "✗ Fail – Closed NPA" in allc[4][7] and "last payment 20 Sep 2026" in allc[4][7]
     assert allc[5][5] == "Refer" and allc[5][4] == "Approved"
     assert allc[6][5] == "Could not assess" and allc[6][6] == "request access"
     assert allc[7][5] == "Approved - no credit data" and "no credit data" in allc[7][7]

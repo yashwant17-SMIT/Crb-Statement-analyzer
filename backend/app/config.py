@@ -170,17 +170,29 @@ class Policy:
     deviation_d2_refer_max_dpd: int = 90              # Refer up to these days ...
     deviation_d2_refer_max_arrears: int = 75_000      # ... and this arrears; beyond is Reject
     deviation_d3_allowed_max_arrears: int = 75_000    # open NPA (or beyond the Refer days): above is Reject
-    deviation_d4_min_good_loans: int = 10             # write-off before the cutoff: Allowed with this many good loans since
+    deviation_d4_min_good_loans: int = 10             # write-off before the cutoff: Allowed with this many good loans since, else flagged
     deviation_d4_reject_min_arrears: int = 75_000     # write-off since the cutoff: above this arrears is Reject, else Refer
-    deviation_d5_allowed_max_principal: int = 75_000  # closed NPA cleared after the cutoff: Allowed up to this loan size ...
-    deviation_d5_min_months_cleared: int = 6          # ... when cleared at least this many months ago; else Reject
+    deviation_d5_cleared_by: str = "2026-01-01"       # closed NPA whose term and clearance both end before this: Allowed
+    deviation_d5_allowed_max_principal: int = 75_000  # otherwise Allowed up to this loan size; above is Reject
     deviation_d5_mobile_loan_days: int = 30           # tenure assumed for a mobile loan that prints no terms
 
     # Advisory thresholds. These do NOT open or close the gate - they raise
     # findings, and a blocking finding means a credit officer must decide.
     max_days_in_arrears: int = 30      # any open account at/above this is blocking
     max_arrears_refer: int = 500_000   # arrears above this are blocking, below are a warning
-    max_enquiries_90d: int = 3         # enquiry velocity warning
+
+    # Bureau flags: report only, they never hold the application. Arrear
+    # markers come from the 24-month payment grids (days past due per month).
+    flag_arrear_months: int = 24          # look back this many months of the grids ...
+    flag_arrear_min_days: int = 2         # ... for a month at least this many days late ...
+    flag_arrear_min_accounts: int = 3     # ... on this many accounts, open or closed
+    flag_worst_arrear_days: int = 30      # or any month this late on any account
+    flag_recent_months: int = 6           # or, in this many months,
+    flag_recent_min_late: int = 2         # this many instalments ...
+    flag_recent_max_days: int = 30        # ... paid between flag_arrear_min_days and this many days late
+    flag_stacking_min_loans: int = 10     # loan stacking: this many loans listed ...
+    flag_stacking_days: int = 60          # ... within this many days of the report
+    flag_enquiries_min_30d: int = 5       # this many bureau enquiries in the last 30 days
 
     # A non-performing facility (LOSS, DOUBTFUL, SUBSTANDARD) is not being
     # serviced, so a "monthly EMI" for it describes a repayment schedule that
@@ -366,13 +378,14 @@ class Policy:
         self.deviation_lowest_band = lowest
 
         from datetime import datetime as _dt
-        try:
-            _dt.strptime(self.crb_history_cutoff, "%Y-%m-%d")
-        except (ValueError, TypeError):
-            raise ValueError(
-                f"crb_history_cutoff={self.crb_history_cutoff!r} is not a valid "
-                "date. Use YYYY-MM-DD."
-            )
+        for name in ("crb_history_cutoff", "deviation_d5_cleared_by"):
+            try:
+                _dt.strptime(getattr(self, name), "%Y-%m-%d")
+            except (ValueError, TypeError):
+                raise ValueError(
+                    f"{name}={getattr(self, name)!r} is not a valid "
+                    "date. Use YYYY-MM-DD."
+                )
 
     def as_dict(self) -> dict:
         return {
@@ -391,14 +404,23 @@ class Policy:
             "deviation_d4_min_good_loans": self.deviation_d4_min_good_loans,
             "deviation_d4_reject_min_arrears": self.deviation_d4_reject_min_arrears,
             "deviation_d5_allowed_max_principal": self.deviation_d5_allowed_max_principal,
-            "deviation_d5_min_months_cleared": self.deviation_d5_min_months_cleared,
+            "deviation_d5_cleared_by": self.deviation_d5_cleared_by,
             "deviation_d5_mobile_loan_days": self.deviation_d5_mobile_loan_days,
             "statement_period_target_days": self.statement_period_target_days,
             "statement_period_tolerance_days": self.statement_period_tolerance_days,
             "statement_max_age_days": self.statement_max_age_days,
             "max_days_in_arrears": self.max_days_in_arrears,
             "max_arrears_refer": self.max_arrears_refer,
-            "max_enquiries_90d": self.max_enquiries_90d,
+            "flag_arrear_months": self.flag_arrear_months,
+            "flag_arrear_min_days": self.flag_arrear_min_days,
+            "flag_arrear_min_accounts": self.flag_arrear_min_accounts,
+            "flag_worst_arrear_days": self.flag_worst_arrear_days,
+            "flag_recent_months": self.flag_recent_months,
+            "flag_recent_min_late": self.flag_recent_min_late,
+            "flag_recent_max_days": self.flag_recent_max_days,
+            "flag_stacking_min_loans": self.flag_stacking_min_loans,
+            "flag_stacking_days": self.flag_stacking_days,
+            "flag_enquiries_min_30d": self.flag_enquiries_min_30d,
             "deduct_emi_on_non_performing": self.deduct_emi_on_non_performing,
             "large_txn_threshold": self.large_txn_threshold,
             "min_inflow_count": self.min_inflow_count,

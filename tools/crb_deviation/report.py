@@ -298,15 +298,14 @@ def _summary(ws, records: List[dict], info: dict, policy) -> None:
               "Fail: anything beyond.",
         "D3": f"Each open non-performing loan (or more than {p.deviation_d2_refer_max_dpd} days overdue) listed "
               f"from {cutoff}.  Pass: arrears up to RWF {p.deviation_d3_allowed_max_arrears:,}.  Fail: above.",
-        "D4": f"Write-off listed before {cutoff}: Pass with at least {p.deviation_d4_min_good_loans} loans current "
-              f"and within terms since, Fail with fewer.  Listed since: Refer with arrears up to "
-              f"RWF {p.deviation_d4_reject_min_arrears:,}, Fail above.  A written-off NPA counts here only, with "
-              "its NPA details beneath it.",
-        "D5": f"Each closed non-performing loan.  Pass: cleared before {cutoff}, or cleared on or after it with "
-              f"a loan (principal) up to RWF {p.deviation_d5_allowed_max_principal:,} cleared at least "
-              f"{p.deviation_d5_min_months_cleared} months ago.  Fail: anything else cleared on or after it.  "
-              "Cleared is the last payment date, else listing date + term (30 days for a mobile loan with no "
-              "terms); a loan listed since the cutoff was cleared after it.",
+        "D4": f"Write-off listed before {cutoff}: Pass, flagged for review unless at least "
+              f"{p.deviation_d4_min_good_loans} loans are current and within terms since.  Listed since: Refer "
+              f"with arrears up to RWF {p.deviation_d4_reject_min_arrears:,}, Fail above.  A written-off NPA "
+              "counts here only, with its NPA details beneath it.",
+        "D5": f"Each closed non-performing loan.  Pass: the term and the clearance both ended before "
+              f"{p.deviation_d5_cleared_by}, or a loan (principal) up to RWF {p.deviation_d5_allowed_max_principal:,}.  "
+              "Fail: a larger loan whose term or clearance ended on or after that date.  Cleared is the last payment "
+              "date; the term ends at listing date + term (30 days for a mobile loan with no terms).",
     }
     for code in CODES:
         put(f"{code} {TITLES[code]}", "", "", rules[code])

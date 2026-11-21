@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from . import deviation
@@ -164,6 +164,71 @@ def late_payments(accounts: List[CreditAccount]) -> Dict[str, Any]:
         "accounts": sorted(rows, key=lambda r: (-r["worst_days_late"], -r["late_months"])),
         "summary": summary,
     }
+
+
+def flags(report: ParsedCreditReport, policy: Policy) -> List[Dict[str, Any]]:
+    """Arrear markers, loan stacking and enquiries: report only, never a hold.
+
+    Tax debts are not loans and are left out. Windows count back from the
+    report's own date, so an old report reads as it did when it was pulled.
+    """
+    loans = [a for a in report.accounts if not deviation.is_tax(a)]
+    out = []
+
+    # Arrear markers from the 24-month grids (newest month first).
+    def late(a: CreditAccount, months: int) -> List[tuple]:
+        return [(h["month"], int(h["status"])) for h in (a.payment_history or [])[:months]
+                if h["status"].isdigit() and int(h["status"]) >= policy.flag_arrear_min_days]
+
+    marked = {a.index: late(a, policy.flag_arrear_months) for a in loans}
+    marked = {i: m for i, m in marked.items() if m}
+    worst = max((d for m in marked.values() for _, d in m), default=0)
+    recent = [(a.index, m, d) for a in loans for m, d in late(a, policy.flag_recent_months)
+              if d <= policy.flag_recent_max_days]
+    why = []
+    if len(marked) >= policy.flag_arrear_min_accounts:
+        why.append(f"{len(marked)} accounts with a month {policy.flag_arrear_min_days}+ days late "
+                   f"in the last {policy.flag_arrear_months} months")
+    if worst >= policy.flag_worst_arrear_days:
+        why.append(f"worst arrear {worst} days (limit {policy.flag_worst_arrear_days})")
+    if len(recent) >= policy.flag_recent_min_late:
+        why.append(f"{len(recent)} instalments paid {policy.flag_arrear_min_days}-{policy.flag_recent_max_days} "
+                   f"days late in the last {policy.flag_recent_months} months")
+    if why:
+        out.append(_finding(
+            "ARREAR_MARKERS", "Arrear markers on the payment history", "warning",
+            "; ".join(why).capitalize() + ". Flagged for review; it does not hold the application.",
+            {"accounts": [{"index": i, "months": [{"month": m, "days_late": d} for m, d in ms]}
+                          for i, ms in marked.items()],
+             "worst_days_late": worst,
+             "recent": [{"index": i, "month": m, "days_late": d} for i, m, d in recent]}))
+
+    # Loan stacking: many loans listed in the days before the report.
+    as_of = _report_datetime(report.report_date) or datetime.now()
+    since = as_of - timedelta(days=policy.flag_stacking_days)
+    new = [a for a in loans if (d := _date(a.listing_date)) and since <= d <= as_of]
+    if len(new) >= policy.flag_stacking_min_loans:
+        amount = sum(a.principal_amount for a in new)
+        out.append(_finding(
+            "LOAN_STACKING", "Loan stacking", "warning",
+            f"{len(new)} loans totalling {amount:,.0f} RWF listed in the {policy.flag_stacking_days} days "
+            f"to {as_of:%d %b %Y}. Flagged for review; it does not hold the application.",
+            {"total_principal": round(amount),
+             "accounts": [{"index": a.index, "listing_date": a.listing_date,
+                           "principal": round(a.principal_amount)} for a in new]}))
+
+    # Enquiries in the last 30 days: the bureau's own count, else the listed ones by date.
+    row = report.summary.get("enquiries_-_last_30_days")
+    items = [e for e in report.enquiries
+             if (d := _date(e.get("date"))) and as_of - timedelta(days=30) <= d <= as_of]
+    count = int((row.get("your_sector") or 0) + (row.get("other_sectors") or 0)) if row else len(items)
+    if count >= policy.flag_enquiries_min_30d:
+        out.append(_finding(
+            "ENQUIRY_VELOCITY", "Frequent credit shopping", "warning",
+            f"{count} bureau enquiries in the last 30 days (flag at {policy.flag_enquiries_min_30d}). "
+            "The report gives no amount for an enquiry. Flagged for review; it does not hold the application.",
+            {"last_30_days": count, "items": items}))
+    return out
 
 
 def _cheque_after_cutoff(c: Dict[str, Any], cutoff: datetime) -> bool:
@@ -615,6 +680,8 @@ def assess_credit_report(report: ParsedCreditReport, policy: Policy) -> Dict[str
             late["summary"] + " Shown for review; it does not hold the application.",
             {"buckets": late["buckets"], "accounts": late["accounts"]}))
 
+    findings += flags(report, policy)
+
     blocking = [f for f in findings if f["severity"] == "blocking"]
     if gate["statement_parsing_allowed"] and blocking:
         gate["recommendation"] = "refer"
@@ -1036,15 +1103,6 @@ def _findings(report, policy, open_accounts, exposure, gate) -> List[Dict[str, A
             "One or more open accounts are classified worse than normal risk.",
             {"accounts": [{"index": a.index, "classification": a.classification,
                            "balance": round(a.balance_amount)} for a in watch]}))
-
-    # Enquiry velocity.
-    recent = total("enquiries_-_last_30_days") + total("enquiries_-_last_31_-_60_days")
-    if recent >= policy.max_enquiries_90d:
-        f.append(_finding(
-            "ENQUIRY_VELOCITY", "Frequent credit shopping", "warning",
-            f"{int(recent)} bureau enquiries in the last 60 days, "
-            f"{len(report.enquiries)} on file. Repeated applications often precede distress.",
-            {"recent_60_days": int(recent), "total_listed": len(report.enquiries)}))
 
     # Score / reality divergence - the trap this whole module exists to catch.
     # Arrears and days late count only accounts listed on or after the history

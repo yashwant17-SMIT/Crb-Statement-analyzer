@@ -346,7 +346,7 @@ due**. A band-only decision approves that file. The findings do not:
 | `ARREARS` — 39% of open balance unpaid | blocking |
 | `DELINQUENT` — open account 65 days past due | blocking |
 | `SCORE_DIVERGENCE` — band contradicts the account detail | blocking |
-| `DETERIORATING`, `ADVERSE_CLASSIFICATION`, `ENQUIRY_VELOCITY` | warning |
+| `DETERIORATING`, `ADVERSE_CLASSIFICATION`, `ARREAR_MARKERS`, `LOAN_STACKING`, `ENQUIRY_VELOCITY` | warning |
 | `INSURANCE_ARREARS`, `NO_SECTOR_HISTORY` | informational |
 
 ### Bureau parser traps
