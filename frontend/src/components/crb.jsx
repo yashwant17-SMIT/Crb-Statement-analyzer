@@ -3,10 +3,12 @@ import { money, pct } from '../api'
 import { Evidence } from './index.jsx'
 
 /* ------------------------------------------------------------ upload step */
-export function CrbUpload({ onFile, onSkip, busy }) {
+/** `locked`: the report just sent, when the API said it needs a password. */
+export function CrbUpload({ onFile, onSkip, busy, locked }) {
   const input = useRef(null)
   const [over, setOver] = useState(false)
-  const take = (f) => f && onFile(f)
+  const [password, setPassword] = useState('')
+  const take = (f) => f && onFile(f, password)
 
   return (
     <>
@@ -27,7 +29,19 @@ export function CrbUpload({ onFile, onSkip, busy }) {
           Choose the bureau report
         </button>
         <input ref={input} type="file" accept="application/pdf" hidden
-               onChange={(e) => take(e.target.files?.[0])} />
+               onChange={(e) => { take(e.target.files?.[0]); e.target.value = '' }} />
+        <form onSubmit={(e) => { e.preventDefault(); if (locked && password) onFile(locked, password) }}>
+          <label className="field" style={{ maxWidth: 280 }}>
+            <span>PDF password or national ID · only if locked</span>
+            <input type="password" value={password} autoComplete="off" disabled={busy}
+                   autoFocus={!!locked} onChange={(e) => setPassword(e.target.value)} />
+          </label>
+          {locked && (
+            <button className="btn btn--small" type="submit" disabled={busy || !password}>
+              Unlock {locked.name}
+            </button>
+          )}
+        </form>
         {onSkip && (
           <p style={{ marginTop: 14 }}>
             <button className="btn btn--ghost btn--small" onClick={onSkip} disabled={busy}>

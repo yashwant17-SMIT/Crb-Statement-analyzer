@@ -12,6 +12,7 @@ const cases = {
   'BandGauge':       <BandGauge crb={crb} />,
   'Tier':            <Tier id="t" label="Audit trail" note="note" recessed><p>body</p></Tier>,
   'CrbUpload':       <CrbUpload onFile={() => {}} busy={false} />,
+  'CrbUpload (locked)': <CrbUpload onFile={() => {}} busy={false} locked={{ name: 'report.pdf' }} />,
   'GateBanner':      <GateBanner crb={crb} onContinue={() => {}} busy={false} />,
   'CrbExposure':     <CrbExposure crb={crb} />,
   'CrbFindings':     <CrbFindings findings={crb.findings} />,

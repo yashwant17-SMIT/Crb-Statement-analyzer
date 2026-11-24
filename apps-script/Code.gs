@@ -45,6 +45,10 @@ var FIELDS = {
   requested_amount: ['requestedamount', 'requestedamountrwf', 'amount', 'amountrwf',
                      'loanamount', 'loanamountrwf', 'amountrequested'],
   provider: ['provider', 'statementprovider'],
+  // Only for a password-protected bureau report.
+  crb_password: ['crbpassword', 'crbreportpassword', 'bureaupassword', 'pdfpassword'],
+  // The server tries it as the password of a locked bureau PDF (see its config).
+  national_id: ['nationalid', 'nationalidnumber', 'idnumber', 'nid', 'idcopy'],
   // Where the outcome goes, when the sheet has these columns.
   band: ['band', 'crbband'],
   decision: ['decision', 'status', 'creditdecision'],
@@ -215,6 +219,8 @@ function assessRow_(ctx, n) {
     };
     row.statements.forEach(function (link, i) { payload['statement_file_' + (i + 1)] = pdf_(link); });
     if (row.sno) payload.sno = row.sno;  // the server's SKIP_FRESHNESS_SNOS is matched on it
+    if (row.crbPassword) payload.crb_password = row.crbPassword;
+    if (row.nationalId) payload.national_id = row.nationalId;
     payload.results_state = JSON.stringify(resultsState_(ctx.cfg));
 
     var res;
@@ -441,6 +447,9 @@ function readRow_(ctx, n) {
     amount: typeof amount === 'number' ? String(amount) : String(ctx.display[i][c.requested_amount]).trim(),
     provider: c.provider == null ? '' : String(ctx.display[i][c.provider]).trim(),
     sno: c.sno == null ? '' : String(ctx.display[i][c.sno]).trim(),
+    // As shown: a 16-digit national ID typed as a number loses digits as a value.
+    crbPassword: c.crb_password == null ? '' : String(ctx.display[i][c.crb_password]).trim(),
+    nationalId: c.national_id == null ? '' : String(ctx.display[i][c.national_id]).trim(),
   };
 }
 

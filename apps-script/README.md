@@ -68,6 +68,8 @@ looks for it in the top 15 rows.
 | Customer type | Customer type, Type, TYPE of customer: `New` or `Existing` |
 | Requested amount | Requested amount, Amount, Loan amount, Loan amount requested: `1000000`, `1,000,000` or `RWF 1 000 000` |
 | Provider *(optional)* | Provider, Statement provider: `MTN MoMo` or `Bank of Kigali`. Empty means detect. |
+| National ID *(optional)* | National ID, ID number, NID, ID Copy: while the server's `CRB_PASSWORD_NID_LENGTH` is set, its first 13 digits are tried on a locked bureau PDF |
+| CRB password *(optional)* | CRB password, CRB report password, Bureau password, PDF password: only for a locked bureau PDF. Anyone who can see the sheet can read it. |
 
 Links can be pasted URLs, hyperlinked text, `=HYPERLINK(...)` or Drive smart
 chips (read through the Sheets API). Only Google Drive file links are used.

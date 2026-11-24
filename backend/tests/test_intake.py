@@ -33,7 +33,7 @@ def engine(monkeypatch):
     def gate(open_):
         crb = json.loads(json.dumps(CRB))
         crb["gate"]["statement_parsing_allowed"] = open_
-        monkeypatch.setattr(m, "parse_credit_report", lambda data: type("R", (), {
+        monkeypatch.setattr(m, "parse_credit_report", lambda data, passwords=(): type("R", (), {
             "pages": 1, "accounts": [],
             "profile": type("P", (), {"names": crb["applicant"]["names"], "phones": []})})())
         monkeypatch.setattr(m, "assess_credit_report", lambda report, policy: crb)
@@ -125,6 +125,22 @@ def test_a_listed_row_is_assessed_without_the_freshness_limits(engine, monkeypat
     body = post(**({"sno": sno} if sno else {})).json()
     assert seen["ages"] == ages
     assert body["result"].endswith("(freshness check waived)") is note
+
+
+def test_the_row_bureau_password_and_national_id_reach_the_parser(engine, monkeypatch):
+    engine["gate"](False)
+    seen = {}
+
+    def parse(data, passwords=()):
+        seen["passwords"] = passwords
+        return type("R", (), {"pages": 1, "accounts": []})()
+
+    monkeypatch.setattr(m, "parse_credit_report", parse)
+    assert post(crb_password="pw").status_code == 200
+    assert seen["passwords"] == ["pw"]
+    # The row's ID cell as the sheet shows it; a made-up ID.
+    assert post(national_id="NID 1199000012345678").status_code == 200
+    assert seen["passwords"] == ["1199000012345"]
 
 
 @pytest.mark.parametrize("field,value,message", [

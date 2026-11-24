@@ -15,10 +15,12 @@ export class ApiError extends Error {
  * @param {File} file
  * @param {{creditCap?:number, minBand?:string}} policy
  * @param {AbortSignal} [signal]
+ * @param {string} [password]  only for a password-protected report
  */
-export async function checkCreditReport(file, policy = {}, signal) {
+export async function checkCreditReport(file, policy = {}, signal, password) {
   const form = new FormData()
   form.append('file', file)
+  if (password) form.append('crb_password', password)
   if (policy.creditCap != null) form.append('credit_cap', policy.creditCap)
   if (policy.minBand) form.append('min_band', policy.minBand)
   return post('/api/v1/crb/check', form, signal)

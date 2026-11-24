@@ -99,6 +99,12 @@ FLOAT_ACCOUNT_PATTERNS: List[str] = ["float", "agent float", "till", "nostro"]
 # judged; the row's result says the check was waived. Empty it when done.
 SKIP_FRESHNESS_SNOS: List[str] = ["230", "352"]
 
+# Locked TransUnion PDFs seen so far open with the applicant's 16-digit national
+# ID cut to its first 13 digits. Until the team confirms that holds, every
+# national ID Ledger can see before opening the PDF (in the typed password, the
+# file name, the intake row's ID cell) is tried at this length. 0 turns it off.
+CRB_PASSWORD_NID_LENGTH = 13
+
 # Institutions whose credits are almost never third-party trade revenue:
 # the customer's own bank/e-wallet accounts, remittance rails, operator credits.
 INSTITUTION_PATTERNS: List[str] = [

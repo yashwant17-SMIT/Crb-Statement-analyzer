@@ -18,11 +18,12 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import re
 import secrets
 import time
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,9 +34,9 @@ from starlette.datastructures import UploadFile as FormFile
 from . import intake, intake_fields, sheets
 from .analyzer import analyze
 from .combine import account_label, combine_reports, group_by_account
-from .config import DEFAULT_POLICY, SKIP_FRESHNESS_SNOS, Policy
+from .config import CRB_PASSWORD_NID_LENGTH, DEFAULT_POLICY, SKIP_FRESHNESS_SNOS, Policy
 from .crb_analyzer import assess_credit_report
-from .crb_parser import BAND_LADDER, CreditReportParseError, parse_credit_report
+from .crb_parser import BAND_LADDER, CreditReportLockedError, CreditReportParseError, parse_credit_report
 from .statements import StatementParseError, parse_statement, provider_options
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -124,6 +125,34 @@ async def crb_parse_error_handler(_: Request, exc: CreditReportParseError):
             "message": str(exc),
             "hint": "Upload the original TransUnion PDF. Note the bureau report and "
                     "the MoMo statement are different documents and go in different slots.",
+        },
+    )
+
+
+def _crb_passwords(password: Optional[str], *nid_sources: Optional[str]) -> list[str]:
+    """What to try on a locked bureau PDF: the password as given, then each
+    16-digit national ID in it or in `nid_sources`, cut to
+    CRB_PASSWORD_NID_LENGTH (see config)."""
+    out = [password] if password else []
+    if CRB_PASSWORD_NID_LENGTH:
+        for text in (password, *nid_sources):
+            for nid in re.findall(r"(?<!\d)\d{16}(?!\d)", text or ""):
+                if nid[:CRB_PASSWORD_NID_LENGTH] not in out:
+                    out.append(nid[:CRB_PASSWORD_NID_LENGTH])
+    return out
+
+
+@app.exception_handler(CreditReportLockedError)
+async def crb_locked_error_handler(_: Request, exc: CreditReportLockedError):
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": exc.code,
+            "message": str(exc),
+            "hint": "The first 13 digits of the applicant's national ID open the locked "
+                    "reports seen so far, and were tried when Ledger could find the ID: "
+                    "enter the full national ID as the password to have it tried. "
+                    "Otherwise ask whoever downloaded the report.",
         },
     )
 
@@ -400,11 +429,12 @@ async def crb_check(
     file: UploadFile = File(..., description="Credit bureau report PDF"),
     credit_cap: Optional[int] = Form(None),
     min_band: Optional[str] = Form(None),
+    crb_password: Optional[str] = Form(None, description="Only for a password-protected report"),
 ):
     """Step 1 of the process. Decides whether the statement may be parsed at all."""
     data = await _read_pdf(file)
     started = time.perf_counter()
-    report = parse_credit_report(data)
+    report = parse_credit_report(data, _crb_passwords(crb_password, file.filename))
     policy = _policy_from_form(credit_cap=credit_cap, min_band=min_band)
     result = assess_credit_report(report, policy)
     result["meta"] = {
@@ -429,6 +459,7 @@ async def assess_application(
     min_band: Optional[str] = Form(None),
     customer_type: Optional[str] = Form(None),
     requested_amount: Optional[int] = Form(None),
+    crb_password: Optional[str] = Form(None, description="Only for a password-protected report"),
 ):
     """The enforced end-to-end flow.
 
@@ -437,7 +468,8 @@ async def assess_application(
     both files, because the statement is not touched until the band clears.
     """
     policy = _policy_from_form(large_txn_threshold, min_inflow_count, credit_cap, min_band)
-    out, bureau = assess_bureau(crb_file.filename, await _read_pdf(crb_file), policy)
+    out, bureau = assess_bureau(crb_file.filename, await _read_pdf(crb_file), policy,
+                                _crb_passwords(crb_password, crb_file.filename))
     if not out["credit_bureau"]["gate"]["statement_parsing_allowed"]:
         return out
     statements = await _read_statements(statement_file or [])
@@ -449,10 +481,10 @@ async def assess_application(
 # and the intake-sheet routes, so a row picked from a sheet is held to exactly
 # the same gate as a manual upload. Callers fetch the statements only after
 # assess_bureau says the gate is open.
-def assess_bureau(crb_name: str, crb_bytes: bytes, policy: Policy):
+def assess_bureau(crb_name: str, crb_bytes: bytes, policy: Policy, passwords: Sequence[str] = ()):
     """Step 1. Returns the response so far and the parsed report for step 2."""
     started = time.perf_counter()
-    report = parse_credit_report(crb_bytes)
+    report = parse_credit_report(crb_bytes, passwords)
     crb = assess_credit_report(report, policy)
     crb["meta"] = {
         "filename": crb_name,
@@ -653,7 +685,8 @@ async def intake_assess(request: Request):
     Multipart: `crb_file`, statements as `statement_file` (repeated) or
     `statement_file_1`, `statement_file_2`, ... (Apps Script cannot repeat a
     field), the row's cells as typed: `customer_type`, `requested_amount`
-    and optionally `provider`, and `results_state`: JSON of the results
+    and optionally `provider`, `crb_password` and `national_id` (the row's ID
+    cell, for a locked bureau PDF), and `results_state`: JSON of the results
     workbook's {"tabs": {title: sheetId}, "register": [[customer, current]]}.
     Cells are read strictly and a bad one is a 422 naming it. Requires the
     X-Intake-Token header.
@@ -700,7 +733,12 @@ async def intake_assess(request: Request):
     # are lifted for it, and the result says so. Everything else is as live.
     waived = str(form.get("sno") or "").strip() in SKIP_FRESHNESS_SNOS
     policy = Policy(crb_max_age_days=100_000, statement_max_age_days=100_000) if waived else Policy()
-    out, bureau = assess_bureau(crb_file.filename, await _read_pdf(crb_file), policy)
+    def text(key: str) -> Optional[str]:
+        value = form.get(key)
+        return value if isinstance(value, str) else None
+
+    passwords = _crb_passwords(text("crb_password"), crb_file.filename, text("national_id"))
+    out, bureau = assess_bureau(crb_file.filename, await _read_pdf(crb_file), policy, passwords)
     if out["credit_bureau"]["gate"]["statement_parsing_allowed"]:
         out = assess_statements(out, bureau, await _read_statements(statement_files), [prov or ""],
                                 policy, customer_type=ctype, requested_amount=amount)

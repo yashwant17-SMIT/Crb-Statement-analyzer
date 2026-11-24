@@ -111,6 +111,14 @@ curl -F "file=@statement.pdf" \
 Optional form fields override credit policy per request:
 `large_txn_threshold`, `min_inflow_count`, `credit_cap`.
 
+A password-protected bureau report opens with the optional `crb_password`
+field on `/crb/check`, `/applications/assess` and `/intake/assess`. It is used
+to open the PDF and is neither stored nor logged. For now Ledger also tries the
+first 13 digits of any 16-digit national ID in that field, in the file name,
+or in the intake row's ID cell (`national_id`), as the locked TransUnion
+reports seen so far use it. `CRB_PASSWORD_NID_LENGTH = 0` in `config.py`
+turns that off.
+
 ### Response shape
 
 ```
@@ -134,6 +142,8 @@ meta             filename, rows_parsed vs rows_declared, elapsed_ms
 | 415 | `unsupported_type` | Not a PDF |
 | 413 | `file_too_large`   | Above `MAX_UPLOAD_MB` (default 25) |
 | 422 | `statement_unreadable` | Scanned, encrypted, or not a MoMo statement |
+| 422 | `credit_report_password_required` | The bureau PDF is password-protected; send `crb_password` |
+| 422 | `credit_report_password_incorrect` | `crb_password` does not open the bureau PDF |
 
 ### Environment
 

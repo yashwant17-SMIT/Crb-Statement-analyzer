@@ -21,6 +21,9 @@ import {
  * 'blocked' after the bureau blocks, or 'skipped' when there is no bureau
  * report at all. The report then carries a banner saying the CRB did not pass.
  */
+// The API's answers for a bureau PDF that needs a password.
+const LOCKED = ['credit_report_password_required', 'credit_report_password_incorrect']
+
 export default function App() {
   const [stage, setStage] = useState('crb')
   const [crb, setCrb] = useState(null)
@@ -34,6 +37,8 @@ export default function App() {
   const [sheetsEnabled, setSheetsEnabled] = useState(false)
   const [sheet, setSheet] = useState({ state: 'idle' })
   const abort = useRef(null)
+  // Kept so a locked report can be retried with its password without choosing it again.
+  const crbFile = useRef(null)
 
   const busy = stage === 'crbLoading' || stage === 'stmtLoading'
 
@@ -74,7 +79,8 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage, sheetsEnabled])
 
-  async function runCrb(file) {
+  async function runCrb(file, password) {
+    crbFile.current = file
     setFiles((f) => ({ ...f, crb: file.name }))
     setError(null)
     setCrbOverride(null)
@@ -82,7 +88,7 @@ export default function App() {
     abort.current?.abort()
     abort.current = new AbortController()
     try {
-      const data = await checkCreditReport(file, {}, abort.current.signal)
+      const data = await checkCreditReport(file, {}, abort.current.signal, password)
       setCrb(data)
       setStage(data.gate.statement_parsing_allowed ? 'gate' : 'blocked')
       window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -214,7 +220,10 @@ export default function App() {
           </div>
         )}
 
-        {stage === 'crb' && <CrbUpload onFile={runCrb} onSkip={skipCrb} busy={busy} />}
+        {stage === 'crb' && (
+          <CrbUpload onFile={runCrb} onSkip={skipCrb} busy={busy}
+                     locked={LOCKED.includes(error?.code) ? crbFile.current : null} />
+        )}
 
         {/* ---- the bureau decision, and its evidence ---- */}
         {crb && stage !== 'crb' && (

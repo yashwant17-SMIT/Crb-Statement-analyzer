@@ -99,6 +99,78 @@ def test_unreadable_pdf_is_reported_not_500():
     assert "MTN MoMo" in body["message"] or "Bank of Kigali" in body["message"]
 
 
+def _locked_open(*a, password="", **k):
+    """pdfplumber.open on a password-protected PDF: pdfminer's error, wrapped."""
+    from pdfminer.pdfdocument import PDFPasswordIncorrect
+    from pdfplumber.utils.exceptions import PdfminerException
+    try:
+        raise PDFPasswordIncorrect()
+    except PDFPasswordIncorrect as e:
+        raise PdfminerException(e)
+
+
+@pytest.mark.parametrize("form,code", [
+    ({}, "credit_report_password_required"),
+    ({"crb_password": "wrong"}, "credit_report_password_incorrect"),
+])
+def test_a_locked_bureau_report_asks_for_its_password(monkeypatch, form, code):
+    import app.crb_parser as p
+    monkeypatch.setattr(p.pdfplumber, "open", _locked_open)
+    r = _upload("/api/v1/crb/check", PDF, **form)
+    assert r.status_code == 422
+    assert r.json()["error"] == code
+
+
+# A made-up 16-digit national ID and its first 13 digits.
+NID, NID13 = "1199000012345678", "1199000012345"
+
+
+def _tried(monkeypatch, opens_with=None):
+    """Replace pdfplumber.open with a locked PDF; returns the passwords tried."""
+    import app.crb_parser as p
+    tried = []
+
+    def opened(f, password=""):
+        tried.append(password)
+        if password != opens_with:
+            _locked_open()
+        raise ValueError("opened")  # far enough: the parse itself is not under test
+
+    monkeypatch.setattr(p.pdfplumber, "open", opened)
+    return tried
+
+
+@pytest.mark.parametrize("filename,form,tried", [
+    # The password as typed, then the national ID in it cut to 13 digits.
+    ("r.pdf", {"crb_password": NID}, ["", NID, NID13]),
+    # A file named after the applicant's ID needs nothing typed.
+    (f"{NID}.pdf", {}, ["", NID13]),
+    (f"{NID} (2).pdf", {"crb_password": "x"}, ["", "x", NID13]),
+    # Not a 16-digit ID: nothing is guessed.
+    (f"{NID[:15]}.pdf", {}, [""]),
+])
+def test_a_locked_bureau_report_tries_the_national_id(monkeypatch, filename, form, tried):
+    seen = _tried(monkeypatch)
+    _upload("/api/v1/crb/check", PDF, filename=filename, **form)
+    assert seen == tried
+
+
+def test_the_national_id_rule_can_be_turned_off(monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "CRB_PASSWORD_NID_LENGTH", 0)
+    seen = _tried(monkeypatch)
+    r = _upload("/api/v1/crb/check", PDF, filename=f"{NID}.pdf")
+    assert seen == [""] and r.json()["error"] == "credit_report_password_required"
+
+
+def test_the_first_password_that_opens_the_pdf_is_used(monkeypatch):
+    seen = _tried(monkeypatch, opens_with=NID13)
+    r = client.post("/api/v1/applications/assess", data={"crb_password": NID},
+                    files={"crb_file": ("c.pdf", io.BytesIO(PDF), "application/pdf")})
+    assert seen == ["", NID, NID13]
+    assert r.json()["error"] == "credit_report_unreadable", "opened, so not a password error"
+
+
 # ------------------------------------------------------------- the gate ------
 def test_assess_requires_the_bureau_report_first():
     """The enforced flow will not look at a statement without a bureau report."""
@@ -171,7 +243,7 @@ def test_assess_does_not_open_the_statement_when_the_bureau_blocks(monkeypatch):
     import app.main as m
 
     monkeypatch.setattr(m, "parse_credit_report",
-                        lambda data: type("R", (), {"pages": 2, "accounts": []})())
+                        lambda data, passwords=(): type("R", (), {"pages": 2, "accounts": []})())
     monkeypatch.setattr(m, "assess_credit_report", lambda report, policy: {
         "gate": {"statement_parsing_allowed": False, "reason": "band", "band": "GG",
                  "minimum_band": "DD", "decision": "decline"}})

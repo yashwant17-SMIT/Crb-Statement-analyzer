@@ -20,9 +20,10 @@ from __future__ import annotations
 import io
 import re
 from dataclasses import dataclass, asdict, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import pdfplumber
+from pdfminer.pdfdocument import PDFPasswordIncorrect
 
 # Band ladder, lowest risk first. Straight off the report's own index page.
 BAND_LADDER: List[str] = ["AA", "BB", "CC", "DD", "EE", "FF", "GG", "HH", "II", "JJ"]
@@ -62,6 +63,14 @@ _FREQ_MONTHS: Dict[str, float] = {
 
 class CreditReportParseError(ValueError):
     """Raised when the file is not a readable credit bureau report."""
+
+
+class CreditReportLockedError(CreditReportParseError):
+    """The PDF needs a password to open, and none or the wrong one was given."""
+
+    def __init__(self, message: str, code: str):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass
@@ -522,11 +531,32 @@ def _no_hit(summary: Dict[str, Dict[str, Optional[float]]]) -> bool:
     return all(r.get(c) == 0 for r in rows for c in ("your_sector", "other_sectors"))
 
 
-def parse_credit_report(data: bytes) -> ParsedCreditReport:
-    try:
-        pdf = pdfplumber.open(io.BytesIO(data))
-    except Exception as exc:  # noqa: BLE001
-        raise CreditReportParseError(f"File could not be opened as a PDF: {exc}") from exc
+def _open(data: bytes, passwords: Sequence[str]):
+    """The PDF, opened with the first of `passwords` that works.
+
+    No password is tried first: an unlocked PDF, or one locked only against
+    editing, opens with it and could fail with a wrong one.
+    """
+    tries = [""] + [p for p in passwords if p]
+    for pw in tries:
+        try:
+            return pdfplumber.open(io.BytesIO(data), password=pw)
+        except Exception as exc:  # noqa: BLE001
+            # pdfplumber wraps pdfminer's error; a missing and a wrong password
+            # both arrive as PDFPasswordIncorrect.
+            if not any(isinstance(e, PDFPasswordIncorrect) for e in (exc, exc.__context__, *exc.args)):
+                raise CreditReportParseError(f"File could not be opened as a PDF: {exc}") from exc
+    if len(tries) > 1:
+        raise CreditReportLockedError(
+            "The password for this bureau report is wrong.", "credit_report_password_incorrect")
+    raise CreditReportLockedError(
+        "This bureau report is password-protected. Enter its password and try again.",
+        "credit_report_password_required")
+
+
+def parse_credit_report(data: bytes, passwords: Sequence[str] = ()) -> ParsedCreditReport:
+    """`passwords` are tried in order on a password-protected report."""
+    pdf = _open(data, passwords)
 
     with pdf:
         pages = len(pdf.pages)

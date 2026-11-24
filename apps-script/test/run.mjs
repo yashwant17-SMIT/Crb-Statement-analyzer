@@ -512,6 +512,29 @@ const tests = {
     assert.throws(() => h.ctx.runPendingOnTimer(), /no tab named "Sheet 14"/)
   },
 
+  'a CRB password column is sent, and only when filled'() {
+    const header = [...HEADER, 'CRB report password']
+    const h = harness({
+      rows: [header, [...row(), '1199780010211003'], [...row(), '']],
+      files: FILES, respond: () => ({ code: 200, body: OK }),
+    })
+    h.ctx.assessPending()
+    assert.equal(h.fetches[0].opts.payload.crb_password, '1199780010211003')
+    assert.equal(h.fetches[0].opts.payload.crb_file.name, 'crb.pdf', 'the password column is not the CRB link')
+    assert.ok(!('crb_password' in h.fetches[1].opts.payload))
+  },
+
+  'the ID Copy cell is sent as the national ID'() {
+    const header = [...HEADER, 'ID Copy']
+    const h = harness({
+      rows: [header, [...row(), '1199000012345678'], [...row(), '']],
+      files: FILES, respond: () => ({ code: 200, body: OK }),
+    })
+    h.ctx.assessPending()
+    assert.equal(h.fetches[0].opts.payload.national_id, '1199000012345678')
+    assert.ok(!('national_id' in h.fetches[1].opts.payload))
+  },
+
   'LEDGER_URL must be https'() {
     const h = harness({ rows: [HEADER, row()], files: FILES, respond: () => ({}), props: { LEDGER_URL: 'http://1.2.3.4' } })
     assert.throws(() => h.ctx.assessPending(), /must start with https/)
