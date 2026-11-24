@@ -25,7 +25,9 @@
  *   LEDGER_URL         https://ledger.example.com   (required)
  *   LEDGER_TOKEN       the server's INTAKE_TOKEN    (required)
  *   RESULTS_SHEET_ID   the results workbook (default: this spreadsheet)
- *   INTAKE_TAB         tab holding the applications (default: the first tab)
+ *   INTAKE_TAB         tab(s) holding the applications, comma-separated
+ *                      (default: the first tab). The menu works on whichever
+ *                      of them is open; automatic runs go through them all.
  *
  * Needs the Google Sheets advanced service (appsscript.json enables it).
  */
@@ -90,7 +92,7 @@ function onOpen() {
 }
 
 function assessSelected() {
-  var ctx = context_();
+  var ctx = menuContext_();
   if (SpreadsheetApp.getActiveSheet().getSheetId() !== ctx.sheet.getSheetId()) {
     throw new Error('Select rows on the "' + ctx.sheet.getName() + '" tab first.');
   }
@@ -105,22 +107,32 @@ function assessSelected() {
 }
 
 function assessPending() {
-  var ctx = context_();
+  var ctx = menuContext_();
   run_(ctx, pendingRows_(ctx), true);
 }
 
 /** Split the dates out of Ledger assessment without assessing anything. */
 function separateDates() {
-  var ctx = context_();
+  var ctx = menuContext_();
   var moved = (ctx.split || 0) + splitDates_(ctx, ctx.cols);
   SpreadsheetApp.getActive().toast(moved ? moved + ' date(s) moved to Ledger date.'
     : 'No dates left in Ledger assessment.', 'Ledger');
 }
 
-/** The timer entry point: no dialogs, nothing to click. */
+/** The timer entry point: no dialogs, nothing to click. Every intake tab, in
+ *  order, within one time budget. A tab that cannot be read is skipped. */
 function runPendingOnTimer() {
-  var ctx = context_();
-  run_(ctx, pendingRows_(ctx), false);
+  var cfg = config_(), started = Date.now(), errors = [];
+  intakeSheets_(cfg).forEach(function (sheet) {
+    if (Date.now() - started > TIME_BUDGET_MS) return;
+    try {
+      var ctx = context_(cfg, sheet);
+      run_(ctx, pendingRows_(ctx), false, started);
+    } catch (e) {
+      errors.push(sheet.getName() + ': ' + e.message);
+    }
+  });
+  if (errors.length) throw new Error(errors.join('\n'));
 }
 
 function enableAutomaticRuns() {
@@ -165,14 +177,14 @@ function checkConnection() {
 }
 
 /* ------------------------------------------------------------- the run */
-function run_(ctx, rows, interactive) {
+function run_(ctx, rows, interactive, started) {
   var lock = LockService.getDocumentLock();
   if (!lock.tryLock(5000)) {
     if (interactive) SpreadsheetApp.getActive().toast('Another run is in progress. Try again shortly.', 'Ledger');
     return;
   }
   try {
-    var started = Date.now();
+    started = started || Date.now();
     var done = 0, failed = 0;
     for (var i = 0; i < rows.length; i++) {
       if (Date.now() - started > TIME_BUDGET_MS) break;
@@ -235,11 +247,32 @@ function assessRow_(ctx, n) {
 }
 
 /* ------------------------------------------------------------- reading */
-function context_() {
-  var cfg = config_();
+// The tabs INTAKE_TAB names, or the first tab when it names none.
+function intakeSheets_(cfg) {
   var ss = SpreadsheetApp.getActive();
-  var sheet = cfg.tab ? ss.getSheetByName(cfg.tab) : ss.getSheets()[0];
-  if (!sheet) throw new Error('There is no tab named "' + cfg.tab + '". Check INTAKE_TAB.');
+  if (!cfg.tabs.length) return [ss.getSheets()[0]];
+  return cfg.tabs.map(function (name) {
+    var sheet = ss.getSheetByName(name);
+    if (!sheet) throw new Error('There is no tab named "' + name + '". Check INTAKE_TAB.');
+    return sheet;
+  });
+}
+
+// The menu works on the open tab when it is an intake tab, or on the only
+// intake tab there is.
+function menuContext_() {
+  var cfg = config_();
+  var sheets = intakeSheets_(cfg);
+  var active = SpreadsheetApp.getActiveSheet().getSheetId();
+  var open = sheets.filter(function (s) { return s.getSheetId() === active; })[0];
+  if (!open && sheets.length > 1) {
+    throw new Error('Open one of the intake tabs first: ' +
+      sheets.map(function (s) { return s.getName(); }).join(', ') + '.');
+  }
+  return context_(cfg, open || sheets[0]);
+}
+
+function context_(cfg, sheet) {
   var range = sheet.getDataRange();
   var ctx = {
     cfg: cfg, sheet: sheet,
@@ -262,7 +295,8 @@ function config_() {
   if (!/^https:\/\//.test(url)) throw new Error('LEDGER_URL must start with https://.');
   return {
     url: url, token: token,
-    tab: String(p.getProperty('INTAKE_TAB') || '').trim(),
+    tabs: String(p.getProperty('INTAKE_TAB') || '').split(',')
+      .map(function (t) { return t.trim(); }).filter(String),
     resultsId: String(p.getProperty('RESULTS_SHEET_ID') || '').trim() || SpreadsheetApp.getActive().getId(),
   };
 }
@@ -311,8 +345,8 @@ function columns_(ctx) {
   if (!best || best.cols.missing.length === 4) {
     var tabs = SpreadsheetApp.getActive().getSheets().map(function (s) { return s.getName(); });
     throw new Error('No header row in the top ' + HEADER_SCAN_ROWS + ' rows of the "' +
-      ctx.sheet.getName() + '" tab. If the applications are on another tab, set INTAKE_TAB ' +
-      'to its name. Tabs: ' + tabs.join(', ') + '.');
+      ctx.sheet.getName() + '" tab. If the applications are on another tab, add its name to ' +
+      'INTAKE_TAB. Tabs: ' + tabs.join(', ') + '.');
   }
   var header = ctx.display[best.row];
   cols = best.cols;

@@ -140,10 +140,11 @@ function workbook(fail) {
   return wb
 }
 
-function harness({ rows, files, respond, props = {}, failWrite }) {
+function harness({ rows, files, respond, props = {}, failWrite, tabs = {}, active }) {
   const wb = workbook(failWrite)
   const intake = new Sheet('Applications', 1, rows)
-  const sheets = [intake]
+  const sheets = [intake, ...Object.entries(tabs).map(([name, r], i) => new Sheet(name, 2 + i, r))]
+  const open = () => sheets.find((s) => s.name === (active ?? 'Applications'))
   const fetches = []
   const toasts = []
   const ss = {
@@ -156,8 +157,8 @@ function harness({ rows, files, respond, props = {}, failWrite }) {
   const blob = (name, data) => ({ name, data, setName(n) { this.name = n; return this } })
   const ctx = {
     SpreadsheetApp: {
-      getActive: () => ss, getActiveSheet: () => intake, flush() {},
-      getActiveRangeList: () => ({ getRanges: () => [intake.getRange(2, 1, 2, 1)] }),
+      getActive: () => ss, getActiveSheet: open, flush() {},
+      getActiveRangeList: () => ({ getRanges: () => [open().getRange(2, 1, 2, 1)] }),
       getUi: () => ({ alert() {}, ButtonSet: {} }),
       DataValidationCriteria: { VALUE_IN_LIST: 'VALUE_IN_LIST', VALUE_IN_RANGE: 'VALUE_IN_RANGE' },
     },
@@ -471,6 +472,44 @@ const tests = {
   'a tab with no header row names the tabs'() {
     const h = harness({ rows: [[], ['x']], files: FILES, respond: () => ({}) })
     assert.throws(() => h.ctx.assessPending(), /No header row .* "Applications" tab.*INTAKE_TAB.*Tabs: Applications/)
+  },
+
+  'INTAKE_TAB can name several tabs'() {
+    const h = harness({
+      rows: [HEADER, row()], tabs: { Dashboard: [['x']], Sheet14: [HEADER, row({ name: 'Copy' })] },
+      props: { INTAKE_TAB: 'Applications, Sheet14' }, active: 'Sheet14',
+      files: FILES, respond: () => ({ code: 200, body: OK }),
+    })
+    const s14 = h.sheets.find((s) => s.name === 'Sheet14')
+    h.ctx.assessPending()
+    assert.equal(h.fetches.length, 1, 'the menu runs on the open intake tab only')
+    assert.equal(String(s14.cells[1][7].value).split(' · ')[0], 'Done')
+    assert.equal(h.intake.cells[0].length, HEADER.length, 'the other intake tab is untouched')
+    h.ctx.runPendingOnTimer()
+    assert.equal(h.fetches.length, 2, 'the timer goes through every intake tab')
+    assert.equal(status(h, 2), 'Done')
+  },
+
+  'with several intake tabs the menu needs one of them open'() {
+    const h = harness({
+      rows: [HEADER, row()], tabs: { Dashboard: [['x']], Sheet14: [HEADER, row()] },
+      props: { INTAKE_TAB: 'Applications,Sheet14' }, active: 'Dashboard', files: FILES, respond: () => ({}),
+    })
+    assert.throws(() => h.ctx.assessPending(), /Open one of the intake tabs first: Applications, Sheet14/)
+  },
+
+  'with one intake tab the menu works from any tab, as before'() {
+    const h = harness({
+      rows: [HEADER, row()], tabs: { Dashboard: [['x']] }, active: 'Dashboard',
+      files: FILES, respond: () => ({ code: 200, body: OK }),
+    })
+    h.ctx.assessPending()
+    assert.equal(status(h, 2), 'Done')
+  },
+
+  'a misspelt INTAKE_TAB is named'() {
+    const h = harness({ rows: [HEADER, row()], props: { INTAKE_TAB: 'Applications, Sheet 14' }, files: FILES, respond: () => ({}) })
+    assert.throws(() => h.ctx.runPendingOnTimer(), /no tab named "Sheet 14"/)
   },
 
   'LEDGER_URL must be https'() {

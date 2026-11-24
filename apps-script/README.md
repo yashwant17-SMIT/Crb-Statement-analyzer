@@ -159,7 +159,7 @@ Sheets export already writes to. The person who authorises the script needs
    | `LEDGER_URL` | `https://ledger.yourdomain.com` (no trailing path) |
    | `LEDGER_TOKEN` | the server's `INTAKE_TOKEN` |
    | `RESULTS_SHEET_ID` | *(optional)* the results workbook; default is this spreadsheet |
-   | `INTAKE_TAB` | *(optional)* the tab with the applications; default is the first tab |
+   | `INTAKE_TAB` | *(optional)* the tab(s) with the applications, comma-separated, e.g. `Analysis post 3rd Aug, Sheet14`; default is the first tab |
 
 5. Reload the sheet. A **Ledger** menu appears. Run **Ledger → Check
    connection** and approve the permissions Google asks for: edit
@@ -173,6 +173,12 @@ Sheets export already writes to. The person who authorises the script needs
 - **Ledger → Move dates to Ledger date**: moves the date out of Ledger assessment on rows an older script assessed. Assesses nothing; safe to run more than once.
 - **Ledger → Turn on automatic runs**: pending rows every 10 minutes, with
   nobody clicking.
+
+With several intake tabs, the menu works on the one that is open, and
+automatic runs go through them all in the order `INTAKE_TAB` lists them. Each
+tab is read on its own, so its header row can sit anywhere in its top 15 rows.
+If the same application is on two tabs and pending on both, it is assessed
+twice; the second assessment supersedes the first in the Register.
 
 Each run stops at about 4½ minutes, under Apps Script's 6-minute limit. The
 rows it didn't reach stay pending for the next run.
