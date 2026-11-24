@@ -97,7 +97,7 @@ FLOAT_ACCOUNT_PATTERNS: List[str] = ["float", "agent float", "till", "nostro"]
 # Intake-sheet rows (by their S.No) re-run without the 15-day age limits on the
 # bureau report and the statements. A temporary exception for files already
 # judged; the row's result says the check was waived. Empty it when done.
-SKIP_FRESHNESS_SNOS: List[str] = ["230"]
+SKIP_FRESHNESS_SNOS: List[str] = ["230", "352"]
 
 # Institutions whose credits are almost never third-party trade revenue:
 # the customer's own bank/e-wallet accounts, remittance rails, operator credits.
