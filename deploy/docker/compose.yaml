@@ -1,0 +1,21 @@
+# Production compose file for the server. It pulls a prebuilt image and never
+# builds; copy this file, deploy.sh and .env to the server (see README.md).
+name: momo-underwriter
+services:
+  underwriter:
+    image: ${IMAGE:-ghcr.io/yashwant17-smit/momo-underwriter}:${IMAGE_TAG:-latest}
+    container_name: momo-underwriter
+    env_file: .env
+    # Localhost only: nginx is the one way in. Docker's port rules bypass ufw,
+    # so 0.0.0.0 here would expose customer data on port 8000.
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
