@@ -158,13 +158,18 @@ sudo systemctl restart momo-underwriter
 ```bash
 # Docker Engine: https://docs.docker.com/engine/install/
 cd /opt/momo-underwriter
+cp deploy/docker/env.example .env && chmod 600 .env   # set ACCESS_PASSWORD
 docker compose up -d --build              # http://localhost:8000
 docker compose logs -f
 ```
 
-Set `ACCESS_PASSWORD` under `environment:` in `compose.yaml` (or in a `.env`
-file next to it) before exposing the port. To keep it local-only behind nginx,
-change the port mapping to `"127.0.0.1:8000:8000"`.
+To update: `git pull && docker compose up -d --build`. A plain `restart` keeps
+running the old image.
+
+The container listens on `127.0.0.1:8000`, so put
+[`nginx.conf.example`](nginx.conf.example) in front of it for HTTPS. Its
+filesystem is read-only; the API never writes to disk. To build once and only
+pull on the server, see [`../docker/README.md`](../docker/README.md).
 
 ---
 

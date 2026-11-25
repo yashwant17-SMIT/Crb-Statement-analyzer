@@ -70,12 +70,14 @@ Remove either with `.\uninstall-service.ps1` (add `-UseTaskScheduler` to match).
 From the repo root:
 
 ```powershell
+copy deploy\docker\env.example .env     # then set ACCESS_PASSWORD in .env
 docker compose up -d --build
 ```
 
 Console and API at `http://localhost:8000`. The image is multi-stage: Node
 builds the console, then a slim Python image serves it. Logs with
-`docker compose logs -f`, stop with `docker compose down`.
+`docker compose logs -f`, stop with `docker compose down`. It listens on this PC
+only; add `BIND_ADDRESS=0.0.0.0` to `.env` to share it on the network.
 
 ---
 

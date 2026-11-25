@@ -1,12 +1,27 @@
+# Builds the image from this checkout and runs it. Deploy or update with:
+#
+#   git pull && docker compose up -d --build
+#
+# Settings come from .env next to this file (cp deploy/docker/env.example .env).
+# It is required: without it ACCESS_PASSWORD would silently be unset.
+# To pull a prebuilt image instead of building here, see deploy/docker/.
+name: momo-underwriter
 services:
   underwriter:
     build: .
-    image: momo-underwriter:1.0.0
+    image: momo-underwriter:local
     container_name: momo-underwriter
+    env_file: .env
+    # Localhost by default, so nginx is the one way in: Docker's port rules
+    # bypass ufw. BIND_ADDRESS=0.0.0.0 in .env shares it on the LAN directly.
     ports:
-      - "8000:8000"
-    environment:
-      MAX_UPLOAD_MB: "25"
-      ALLOWED_ORIGINS: "http://localhost:8000"
-      LOG_LEVEL: "INFO"
+      - "${BIND_ADDRESS:-127.0.0.1}:8000:8000"
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

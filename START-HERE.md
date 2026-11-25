@@ -95,10 +95,13 @@ If Docker Desktop is already installed, this replaces steps 1–3 entirely:
 
 ```powershell
 cd C:\path\to\momo-underwriter
+copy deploy\docker\env.example .env     # then set ACCESS_PASSWORD in .env
 docker compose up -d --build
 ```
 
 Same result at http://localhost:8000. You do not need Python or Node installed.
+It is reachable from this PC only; add `BIND_ADDRESS=0.0.0.0` to `.env` to share
+it on the network.
 
 ---
 

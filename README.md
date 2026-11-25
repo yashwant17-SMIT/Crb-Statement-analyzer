@@ -53,6 +53,7 @@ unit, and `nginx.conf.example` adds HTTPS.
 **Docker, any platform:**
 
 ```bash
+cp deploy/docker/env.example .env   # set ACCESS_PASSWORD
 docker compose up -d --build     # console + API on http://localhost:8000
 ```
 
