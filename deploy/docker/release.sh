@@ -5,14 +5,14 @@
 # Usage:
 #   ./release.sh                 # tag with the current commit and "latest"
 #   ./release.sh v1.2.0          # also tag v1.2.0
-#   IMAGE=docker.io/me/momo-underwriter ./release.sh   # another registry
+#   IMAGE=docker.io/me/crb-statement-analyzer ./release.sh   # another registry
 #   PUSH=0 ./release.sh          # build only, no push
 #
 # One-time: docker login ghcr.io -u <github-user>   (token with write:packages)
 if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 set -euo pipefail
 
-IMAGE="${IMAGE:-ghcr.io/yashwant17-smit/momo-underwriter}"
+IMAGE="${IMAGE:-ghcr.io/yashwant17-smit/crb-statement-analyzer}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 PUSH="${PUSH:-1}"
 

@@ -5,12 +5,12 @@
 # Settings come from .env next to this file (cp deploy/docker/env.example .env).
 # It is required: without it ACCESS_PASSWORD would silently be unset.
 # To pull a prebuilt image instead of building here, see deploy/docker/.
-name: momo-underwriter
+name: crb-statement-analyzer
 services:
   underwriter:
     build: .
-    image: momo-underwriter:local
-    container_name: momo-underwriter
+    image: crb-statement-analyzer:local
+    container_name: crb-statement-analyzer
     env_file: .env
     # Localhost by default, so nginx is the one way in: Docker's port rules
     # bypass ufw. BIND_ADDRESS=0.0.0.0 in .env shares it on the LAN directly.

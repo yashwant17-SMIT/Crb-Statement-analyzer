@@ -16,9 +16,9 @@ docker compose up -d
 
 echo "Waiting for the health check..."
 for _ in $(seq 1 30); do
-    status="$(docker inspect -f '{{.State.Health.Status}}' momo-underwriter 2>/dev/null || true)"
+    status="$(docker inspect -f '{{.State.Health.Status}}' crb-statement-analyzer 2>/dev/null || true)"
     if [ "$status" = "healthy" ]; then
-        echo "Healthy: $(docker inspect -f '{{.Config.Image}}' momo-underwriter)"
+        echo "Healthy: $(docker inspect -f '{{.Config.Image}}' crb-statement-analyzer)"
         exit 0
     fi
     sleep 2

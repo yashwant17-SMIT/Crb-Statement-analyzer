@@ -1,30 +1,44 @@
-# nginx reverse proxy with TLS in front of the systemd service.
+# nginx reverse proxy with TLS in front of Ledger. Works for both the Docker
+# container and the systemd service: each listens on 127.0.0.1 only, so nginx
+# is the sole way in.
 #
-#   sudo cp nginx.conf.example /etc/nginx/sites-available/momo-underwriter
-#   # edit server_name below
-#   sudo ln -s /etc/nginx/sites-available/momo-underwriter /etc/nginx/sites-enabled/
+#   sudo cp deploy/linux/nginx.conf.example /etc/nginx/sites-available/crb-statement-analyzer
+#   sudo nano /etc/nginx/sites-available/crb-statement-analyzer    # server_name, and the port below
+#   sudo ln -s /etc/nginx/sites-available/crb-statement-analyzer /etc/nginx/sites-enabled/
+#   sudo rm -f /etc/nginx/sites-enabled/default
 #   sudo nginx -t && sudo systemctl reload nginx
-#   sudo certbot --nginx -d underwriting.example.com     # adds the TLS lines
+#   sudo certbot --nginx -d underwriting.example.com     # adds the TLS lines and the HTTP->HTTPS redirect
 #
-# Install the service WITHOUT --lan so uvicorn listens on 127.0.0.1 only and
-# nginx is the sole way in. Set ACCESS_PASSWORD in /etc/momo-underwriter/env
-# and ALLOWED_ORIGINS=https://underwriting.example.com.
+# Then set ALLOWED_ORIGINS=https://underwriting.example.com and ACCESS_PASSWORD
+# in .env (Docker) or /etc/momo-underwriter/env (systemd), and use the same
+# https:// address as LEDGER_URL in the Apps Script properties.
 
 server {
     listen 80;
     server_name underwriting.example.com;
 
-    # Must be at least MAX_UPLOAD_MB, or nginx rejects large statements with 413
-    # before the API sees them.
-    client_max_body_size 25m;
+    server_tokens off;
+
+    # This caps the whole request, while MAX_UPLOAD_MB (default 25) caps each
+    # file in it, and one assessment can send a bureau report plus up to
+    # MAX_STATEMENT_FILES (12) statements. Too low and nginx answers 413 before
+    # Ledger sees the upload.
+    client_max_body_size 100m;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy same-origin always;
 
     location / {
+        # 8000 = the default HOST_PORT of the container and port of the
+        # service; change it if you moved either.
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        # Large PDFs can take a while to parse.
-        proxy_read_timeout 120s;
+        # Several large PDFs can take a while to parse.
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
     }
 }

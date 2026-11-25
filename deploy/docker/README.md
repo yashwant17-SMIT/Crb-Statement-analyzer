@@ -8,7 +8,7 @@ it holds three files and pulls the image.
 workstation                          GHCR (private)                 prod server
 -----------                          --------------                 -----------
 release.sh  -- build + push -->  ghcr.io/yashwant17-smit/      <-- deploy.sh pulls
-                                   momo-underwriter:<sha>           compose.yaml, .env
+                                   crb-statement-analyzer:<sha>           compose.yaml, .env
 ```
 
 | File | Where it runs | Purpose |
@@ -43,7 +43,7 @@ git checkout main && git pull           # commit everything first; the script re
 It prints the commit tag to deploy, e.g. `IMAGE_TAG=3f9c2ab ./deploy.sh`.
 
 The first push creates the package as **private**. Keep it that way. You can check
-under GitHub → your profile → Packages → momo-underwriter → Package settings.
+under GitHub → your profile → Packages → crb-statement-analyzer → Package settings.
 
 ---
 
@@ -62,12 +62,12 @@ under GitHub → your profile → Packages → momo-underwriter → Package sett
 3. Copy the three server files over:
    ```bash
    # from the workstation
-   ssh user@server 'mkdir -p ~/momo-underwriter'
-   scp deploy/docker/{compose.yaml,deploy.sh,env.example} user@server:~/momo-underwriter/
+   ssh user@server 'mkdir -p ~/crb-statement-analyzer'
+   scp deploy/docker/{compose.yaml,deploy.sh,env.example} user@server:~/crb-statement-analyzer/
    ```
 4. Fill in the secrets on the server:
    ```bash
-   cd ~/momo-underwriter
+   cd ~/crb-statement-analyzer
    cp env.example .env && chmod 600 .env
    nano .env           # ACCESS_PASSWORD is required; INTAKE_TOKEN only if Apps Script posts here
    ```
@@ -75,18 +75,23 @@ under GitHub → your profile → Packages → momo-underwriter → Package sett
    what [`../linux/nginx.conf.example`](../linux/nginx.conf.example) proxies to:
    ```bash
    sudo apt install -y nginx certbot python3-certbot-nginx
-   sudo cp nginx.conf.example /etc/nginx/sites-available/momo-underwriter   # scp it over too
-   sudo nano /etc/nginx/sites-available/momo-underwriter                    # set server_name
-   sudo ln -s /etc/nginx/sites-available/momo-underwriter /etc/nginx/sites-enabled/
+   sudo cp nginx.conf.example /etc/nginx/sites-available/crb-statement-analyzer   # scp it over too
+   sudo nano /etc/nginx/sites-available/crb-statement-analyzer                    # set server_name
+   sudo ln -s /etc/nginx/sites-available/crb-statement-analyzer /etc/nginx/sites-enabled/
+   sudo rm -f /etc/nginx/sites-enabled/default
    sudo nginx -t && sudo systemctl reload nginx
-   sudo certbot --nginx -d underwriting.yourdomain.com
+   sudo certbot --nginx -d underwriting.yourdomain.com --redirect
    sudo ufw allow OpenSSH && sudo ufw allow 'Nginx Full' && sudo ufw enable
    ```
+   Your domain needs a DNS A record pointing at the server first, or certbot
+   fails. Then set `ALLOWED_ORIGINS` in `.env` and the Apps Script `LEDGER_URL`
+   to the same `https://` address. The full walkthrough, with checks, is in
+   [`../linux/README.md`](../linux/README.md#option-b-docker).
 
 ## Every release: prod server
 
 ```bash
-cd ~/momo-underwriter
+cd ~/crb-statement-analyzer
 ./deploy.sh 3f9c2ab        # the tag release.sh printed; no argument = IMAGE_TAG in .env, else latest
 ```
 
@@ -95,10 +100,10 @@ exactly which code it is running.
 
 ## Operations
 
-| Task | Command (in `~/momo-underwriter`) |
+| Task | Command (in `~/crb-statement-analyzer`) |
 |---|---|
 | Roll back | `./deploy.sh <previous-sha>` |
-| Which version is live | `docker inspect -f '{{.Config.Image}}' momo-underwriter` |
+| Which version is live | `docker inspect -f '{{.Config.Image}}' crb-statement-analyzer` |
 | Logs | `docker compose logs -f` |
 | Apply an edited `.env` | `docker compose up -d` (a plain `restart` does not re-read it) |
 | Stop | `docker compose down` |
@@ -114,10 +119,10 @@ Docker itself must be enabled at boot: `sudo systemctl enable docker`.
 ```bash
 # workstation
 PUSH=0 ./deploy/docker/release.sh
-docker save ghcr.io/yashwant17-smit/momo-underwriter:latest | gzip > momo-underwriter.tar.gz
-scp momo-underwriter.tar.gz user@server:~/momo-underwriter/
+docker save ghcr.io/yashwant17-smit/crb-statement-analyzer:latest | gzip > crb-statement-analyzer.tar.gz
+scp crb-statement-analyzer.tar.gz user@server:~/crb-statement-analyzer/
 
 # server
-docker load < momo-underwriter.tar.gz
+docker load < crb-statement-analyzer.tar.gz
 docker compose up -d       # skip deploy.sh: it would try to pull
 ```

@@ -97,8 +97,9 @@ sudo ./uninstall-service.sh [--purge]
 
 Install the service without `--lan` and put nginx in front.
 [`nginx.conf.example`](nginx.conf.example) has a ready config, with
-`certbot --nginx` for the certificate. Keep `client_max_body_size` at or above
-`MAX_UPLOAD_MB`, or nginx will reject large statements with a 413.
+`certbot --nginx` for the certificate. `client_max_body_size` caps the whole
+request, so keep it above `MAX_UPLOAD_MB` times the number of files one
+assessment sends, or nginx rejects large uploads with a 413.
 
 ### 6. Google Sheets export (optional)
 
@@ -155,21 +156,115 @@ sudo systemctl restart momo-underwriter
 
 ## Option B: Docker
 
+The server builds the image from a checkout and runs it behind nginx. To build
+once on a workstation and only pull on the server, see
+[`../docker/README.md`](../docker/README.md) instead.
+
+### 1. Before you start
+
+- A DNS **A record** for your domain (e.g. `underwriting.example.com`) pointing
+  at the server's public IP. certbot needs it to issue the certificate.
+- Ports 80 and 443 open in any cloud firewall or security group. Port 8000
+  stays closed.
+
+### 2. Docker and the code
+
 ```bash
-# Docker Engine: https://docs.docker.com/engine/install/
-cd /opt/momo-underwriter
-cp deploy/docker/env.example .env && chmod 600 .env   # set ACCESS_PASSWORD
-docker compose up -d --build              # http://localhost:8000
-docker compose logs -f
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER && sudo systemctl enable docker   # log out and back in
+
+# The repo is private: give the server a read-only deploy key
+ssh-keygen -t ed25519 -f ~/.ssh/ledger_deploy -N ''
+cat ~/.ssh/ledger_deploy.pub     # GitHub repo -> Settings -> Deploy keys -> Add (leave write off)
+GIT_SSH_COMMAND='ssh -i ~/.ssh/ledger_deploy' \
+  git clone git@github.com:yashwant17-SMIT/Crb-Statement-analyzer.git ~/crb-statement-analyzer
+git -C ~/crb-statement-analyzer config core.sshCommand 'ssh -i ~/.ssh/ledger_deploy'
 ```
 
-To update: `git pull && docker compose up -d --build`. A plain `restart` keeps
-running the old image.
+### 3. Settings
 
-The container listens on `127.0.0.1:8000`, so put
-[`nginx.conf.example`](nginx.conf.example) in front of it for HTTPS. Its
-filesystem is read-only; the API never writes to disk. To build once and only
-pull on the server, see [`../docker/README.md`](../docker/README.md).
+```bash
+cd ~/crb-statement-analyzer
+cp deploy/docker/env.example .env && chmod 600 .env
+nano .env
+```
+
+| Setting | Value |
+|---|---|
+| `ACCESS_PASSWORD` | Required. The console login |
+| `ALLOWED_ORIGINS` | `https://underwriting.example.com` |
+| `INTAKE_TOKEN` | `openssl rand -hex 32`, only if the Apps Script intake is used |
+| `GOOGLE_SHEETS_ID`, `GOOGLE_SERVICE_ACCOUNT_FILE` | Only for Save to Sheets; see below |
+| `HOST_PORT` | Only if 8000 is taken; then change `proxy_pass` in nginx to match |
+
+For Save to Sheets, copy the service-account key in and let the container's
+user (uid 10001) read it:
+
+```bash
+mkdir -p secrets
+cp /path/to/service_account.json secrets/service-account.json
+sudo chown 10001 secrets/service-account.json && chmod 600 secrets/service-account.json
+# .env: GOOGLE_SERVICE_ACCOUNT_FILE=/run/secrets/service-account.json
+```
+
+### 4. Build and start
+
+```bash
+docker compose up -d --build
+docker compose ps                                   # wait for "healthy"
+curl -s http://127.0.0.1:8000/api/v1/health
+```
+
+### 5. nginx and HTTPS
+
+```bash
+sudo apt install -y nginx certbot python3-certbot-nginx
+sudo cp deploy/linux/nginx.conf.example /etc/nginx/sites-available/crb-statement-analyzer
+sudo nano /etc/nginx/sites-available/crb-statement-analyzer    # server_name; port if HOST_PORT changed
+sudo ln -s /etc/nginx/sites-available/crb-statement-analyzer /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d underwriting.example.com --redirect
+```
+
+certbot adds the TLS lines, redirects HTTP to HTTPS, and renews the
+certificate by itself (`sudo certbot renew --dry-run` checks that).
+
+[`nginx.conf.example`](nginx.conf.example) is ready as it is: it proxies to
+`127.0.0.1:8000`, allows 100 MB per request (one assessment can carry
+several statements), waits 180 s for parsing, and adds basic security headers.
+
+### 6. Firewall
+
+```bash
+sudo ufw allow OpenSSH && sudo ufw allow 'Nginx Full' && sudo ufw enable
+```
+
+The container is bound to `127.0.0.1`, which is what keeps port 8000 off the
+internet: Docker's port rules bypass ufw.
+
+### 7. Check it and connect the intake sheet
+
+```bash
+curl -s https://underwriting.example.com/api/v1/health                 # 200, no password
+curl -s -o /dev/null -w '%{http_code}\n' https://underwriting.example.com/   # 401: password on
+```
+
+In the Apps Script **Script properties**, set `LEDGER_URL` to
+`https://underwriting.example.com` and `LEDGER_TOKEN` to the `INTAKE_TOKEN`
+from `.env`, then run **Ledger → Check connection**. No ngrok is needed.
+
+### Updates and rollback
+
+```bash
+cd ~/crb-statement-analyzer
+git pull && docker compose up -d --build          # update; a plain restart keeps the old image
+git checkout <commit> && docker compose up -d --build   # roll back
+docker compose logs -f                            # logs
+docker compose up -d                              # after editing .env
+```
+
+The container's filesystem is read-only; the API never writes to disk.
 
 ---
 
@@ -197,4 +292,4 @@ wheels. Install a supported one and point setup at it: `PYTHON=python3.12 ./setu
 **`User 'momo' cannot read ...`** – the code is in a directory the service
 account cannot enter (often `/home/you`). Move it to `/opt` as in step 2.
 
-**Console shows but uploads fail with 413** – raise `client_max_body_size` in nginx.
+**Console shows but uploads fail with 413** – raise `client_max_body_size` in nginx; it caps the whole request, not each file.
