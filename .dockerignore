@@ -8,3 +8,4 @@ deploy/
 *.md
 *service-account*.json
 *serviceaccount*.json
+secrets/

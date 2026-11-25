@@ -17,6 +17,7 @@ logs/
 frontend/report.sample.json
 
 # Google service account keys
+secrets/
 *service-account*.json
 *serviceaccount*.json
 

@@ -21,6 +21,11 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    # Google service-account key for Save to Sheets: put it in ./secrets/ and
+    # point GOOGLE_SERVICE_ACCOUNT_FILE at /run/secrets/<file> in .env. Mounted,
+    # never baked into the image; secrets/ is ignored by git and Docker.
+    volumes:
+      - ./secrets:/run/secrets:ro
     logging:
       driver: json-file
       options:
