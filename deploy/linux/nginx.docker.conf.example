@@ -1,0 +1,58 @@
+# Server block for an nginx that runs in a Docker container and already serves
+# another site. Put it next to that site's config inside the container's conf
+# directory (usually a mounted ./nginx/conf.d/), then reload:
+#
+#   docker exec <nginx-container> nginx -t
+#   docker exec <nginx-container> nginx -s reload
+#
+# Needs compose.proxy.yaml turned on, so both containers share a network.
+# The TLS lines depend on how the existing site gets its certificates; see
+# deploy/linux/README.md, "nginx already runs in Docker".
+
+server {
+    listen 80;
+    server_name ledger.example.com;
+
+    # If the certificate comes from Let's Encrypt over HTTP, add the existing
+    # site's /.well-known/acme-challenge/ location here.
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    # "listen ... http2" rather than "http2 on;", which needs nginx 1.25.1+.
+    listen 443 ssl http2;
+    server_name ledger.example.com;
+
+    # Paths inside the nginx container. A wildcard certificate the existing
+    # sites already use (e.g. /etc/ssl/<domain>.crt) covers a new subdomain;
+    # otherwise /etc/letsencrypt/live/<subdomain>/fullchain.pem and privkey.pem.
+    ssl_certificate     /etc/ssl/your-domain.crt;
+    ssl_certificate_key /etc/ssl/your-domain.key;
+
+    server_tokens off;
+
+    # Caps the whole request; MAX_UPLOAD_MB caps each file, and one assessment
+    # can send a bureau report plus up to 12 statements.
+    client_max_body_size 100m;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy same-origin always;
+
+    location / {
+        # Docker's DNS, looked up per request: nginx still starts, and recovers,
+        # while the Ledger container is down or being recreated.
+        resolver 127.0.0.11 valid=30s;
+        set $ledger http://crb-statement-analyzer:8000;
+        proxy_pass $ledger;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
+    }
+}

@@ -234,6 +234,55 @@ certificate by itself (`sudo certbot renew --dry-run` checks that).
 `127.0.0.1:8000`, allows 100 MB per request (one assessment can carry
 several statements), waits 180 s for parsing, and adds basic security headers.
 
+### 5b. nginx already runs in Docker
+
+When another site on the server is already served by nginx in a container,
+skip step 5: that container holds ports 80 and 443, and inside it
+`127.0.0.1:8000` is the container itself, not Ledger. Instead, put Ledger on
+its network and add a server block to it.
+
+Find the container, its network, and where its config and certificates live:
+
+```bash
+docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}' | grep -Ei 'nginx|:443'
+docker inspect <nginx-container> -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}'
+docker inspect <nginx-container> -f '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
+```
+
+Join the network, in `.env`, then recreate the container:
+
+```bash
+COMPOSE_FILE=compose.yaml:compose.proxy.yaml
+PROXY_NETWORK=<network from above>
+```
+```bash
+docker compose up -d
+docker exec <nginx-container> wget -qO- http://crb-statement-analyzer:8000/api/v1/health   # or curl
+```
+
+Add the site: copy [`nginx.docker.conf.example`](nginx.docker.conf.example)
+into the host folder mounted at the container's `/etc/nginx/conf.d` (from the
+mounts above), set `server_name`, and make the TLS lines match how the
+existing site gets certificates:
+
+| Existing setup | Certificate for the subdomain |
+|---|---|
+| Certificate files in a mounted folder (e.g. `/etc/ssl/<domain>.crt`), shared by several subdomains | Probably a wildcard: check with the `openssl` command below, and if it lists `*.yourdomain.com`, point `ssl_certificate*` at the same files |
+| A `certbot` container sharing `/etc/letsencrypt` and `/var/www/certbot` with nginx | Comment out the `443` block, reload, then `docker compose run --rm certbot certonly --webroot -w /var/www/certbot -d ledger.example.com` in that stack, uncomment, reload |
+| certbot on the host, certificates mounted into the container | Comment out the `443` block, reload, `sudo certbot certonly --webroot -w <host folder mounted at /var/www/certbot> -d ledger.example.com`, uncomment, reload |
+| `nginx-proxy` with `acme-companion` | No config file: add `VIRTUAL_HOST`, `VIRTUAL_PORT=8000` and `LETSENCRYPT_HOST` set to the subdomain to Ledger's `environment` |
+| Cloudflare in front, origin certificate | Point `ssl_certificate*` at the origin certificate the existing site uses, if it covers `*.yourdomain.com` |
+
+```bash
+# Which names a certificate file covers (run on the host, against the mounted file)
+openssl x509 -in <host path>.crt -noout -subject -enddate -ext subjectAltName
+
+docker exec <nginx-container> nginx -t && docker exec <nginx-container> nginx -s reload
+```
+
+The DNS A record for the subdomain points at the same server IP as the
+existing site. Nothing else on that site changes.
+
 ### 6. Firewall
 
 ```bash

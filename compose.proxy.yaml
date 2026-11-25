@@ -1,0 +1,18 @@
+# Joins Ledger to the Docker network of an nginx that already runs in a
+# container on this host, so that nginx reaches it as
+# http://crb-statement-analyzer:8000. Turn it on in .env:
+#
+#   COMPOSE_FILE=compose.yaml:compose.proxy.yaml
+#   PROXY_NETWORK=<network of the nginx container>
+#
+# The 127.0.0.1 port from compose.yaml stays, for checks from the host.
+services:
+  underwriter:
+    networks:
+      - default
+      - proxy
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:?set PROXY_NETWORK in .env to the nginx container's network}
+    external: true
