@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { amountInWords, analyzeStatement, checkCreditReport, fetchSanctionAmounts, fetchSheetsStatus, money, saveToSheets } from './api'
+import { amountInWords, analyzeStatement, checkCreditReport, fetchArchiveStatus, fetchSanctionAmounts, fetchSheetsStatus, money, saveToArchive, saveToSheets } from './api'
 import {
   Assumptions, CapabilityNotes, Chrome, DetailTables, Disclosures, EmptyState,
   FlowRibbon, Rail, RedFlags, SummaryTable, Verdict, RevenueWaterfall, StatementHealth,
@@ -36,6 +36,8 @@ export default function App() {
   const [crbOverride, setCrbOverride] = useState(null)
   const [sheetsEnabled, setSheetsEnabled] = useState(false)
   const [sheet, setSheet] = useState({ state: 'idle' })
+  const [archiveEnabled, setArchiveEnabled] = useState(false)
+  const [archived, setArchived] = useState({ state: 'idle' })
   const abort = useRef(null)
   // Kept so a locked report can be retried with its password without choosing it again.
   const crbFile = useRef(null)
@@ -49,6 +51,7 @@ export default function App() {
 
   useEffect(() => {
     fetchSheetsStatus().then((s) => setSheetsEnabled(!!s.configured))
+    fetchArchiveStatus().then((s) => setArchiveEnabled(!!s.configured))
     fetchSanctionAmounts().then(setSanctionAmounts).catch(() => setSanctionAmounts(null))
   }, [])
 
@@ -60,24 +63,44 @@ export default function App() {
     if (sanctionAmounts && !sanctionAmounts[type]?.includes(Number(requestedAmount))) setRequestedAmount('')
   }
 
+  // Resolves to the assessment ID of the new Register row, or null.
   async function saveSheet() {
     setSheet({ state: 'saving' })
     try {
       const out = await saveToSheets(crb, report, files)
       setSheet({ state: 'saved', ...out })
+      return out.assessment_id ?? null
     } catch (err) {
       setSheet({ state: 'error', message: err.message })
+      return null
     }
   }
 
-  // Every finished assessment lands in the sheet without the underwriter
-  // having to remember: a full report, or a bureau file that stopped at the
-  // gate. Each save is a new Register row; the customer's earlier rows are
-  // marked superseded.
+  async function saveArchive(assessmentId) {
+    setArchived({ state: 'saving' })
+    try {
+      const inputs = { customer_type: customerType, requested_amount: Number(requestedAmount) || null }
+      const out = await saveToArchive(crb, report, files, inputs, assessmentId)
+      setArchived({ state: 'saved', ...out })
+    } catch (err) {
+      setArchived({ state: 'error', message: err.message })
+    }
+  }
+
+  // Every finished assessment is saved without the underwriter having to
+  // remember: a full report, or a bureau file that stopped at the gate. Each
+  // save is a new Register row (the customer's earlier rows are marked
+  // superseded) and a new JSON file in the customer's archive folder. The
+  // sheet goes first so the file can carry the row's assessment ID. The
+  // idle checks stop a status that arrives late from saving twice.
   useEffect(() => {
-    if (sheetsEnabled && (stage === 'done' || stage === 'blocked')) saveSheet()
+    if (stage !== 'done' && stage !== 'blocked') return
+    ;(async () => {
+      const aid = sheetsEnabled && sheet.state === 'idle' ? await saveSheet() : null
+      if (archiveEnabled && archived.state === 'idle') await saveArchive(aid)
+    })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stage, sheetsEnabled])
+  }, [stage, sheetsEnabled, archiveEnabled])
 
   async function runCrb(file, password) {
     crbFile.current = file
@@ -142,6 +165,7 @@ export default function App() {
     setFiles({ crb: '', statement: '' }); setReview({}); setCustomerType('new'); setRequestedAmount('')
     setCrbOverride(null)
     setSheet({ state: 'idle' })
+    setArchived({ state: 'idle' })
     setStage('crb')
   }
 
@@ -185,6 +209,8 @@ export default function App() {
       <Chrome
         crb={crb} report={report} files={files} onReset={reset} showReset={!!(crb || report || crbOverride)}
         sheet={sheetsEnabled && !busy ? { ...sheet, onSave: saveSheet } : null}
+        archive={archiveEnabled && !busy
+          ? { ...archived, onSave: () => saveArchive(sheet.assessment_id ?? null) } : null}
       />
       <Rail stage={stage} crb={crb} report={report} files={files} />
 

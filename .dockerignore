@@ -9,3 +9,4 @@ deploy/
 *service-account*.json
 *serviceaccount*.json
 secrets/
+data/

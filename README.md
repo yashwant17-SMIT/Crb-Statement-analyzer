@@ -156,6 +156,7 @@ meta             filename, rows_parsed vs rows_declared, elapsed_ms
 | `ACCESS_PASSWORD` | unset | When set, every route except `/api/v1/health` requires HTTP Basic auth |
 | `ACCESS_USERNAME` | `underwriter` | Username paired with `ACCESS_PASSWORD` |
 | `LOG_LEVEL` | `INFO` | Python log level |
+| `ASSESSMENTS_DIR` | unset | When set, every finished assessment (console or intake sheet) is also written as `<name>_<national id>/<date>_<time>.json` under this folder. The Docker setup sets it to `/data/assessments`, mounted from `./data/assessments` |
 | `PYTHONUTF8` | unset | Set to `1` on Windows — the default console codepage cannot encode every character the engine emits. The Linux scripts set it too |
 
 ## Statement formats
@@ -230,9 +231,12 @@ months covering 28+ days.
 **`parse_complete`** compares rows recovered against the count the statement
 declares in its own header. If it is `false`, reconcile before using any figure.
 
-**Stateless.** Nothing is written to disk and nothing is retained after the
-response. Statements are personal financial data — if you add persistence, add
-retention limits and encryption at rest with it.
+**Stateless by default.** Uploaded PDFs are never written to disk. The two
+optional exports are the only results that outlive a request: Google Sheets,
+and the JSON archive when `ASSESSMENTS_DIR` is set. Each archive file is a full
+assessment, so it is personal financial data: the folder is readable only by
+the service (files are `0600`), and it needs a retention limit and backups
+that are encrypted at rest.
 
 ## Tests
 

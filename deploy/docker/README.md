@@ -14,7 +14,7 @@ release.sh  -- build + push -->  ghcr.io/yashwant17-smit/      <-- deploy.sh pul
 | File | Where it runs | Purpose |
 |---|---|---|
 | `release.sh` | workstation | Builds the `linux/amd64` image from the repo-root `Dockerfile` and pushes it tagged `:<commit>` and `:latest` |
-| `compose.yaml` | server | Runs the pulled image on `127.0.0.1:8000` with a read-only filesystem and log rotation |
+| `compose.yaml` | server | Runs the pulled image on `127.0.0.1:8000` with a read-only filesystem (except the JSON archive in `./data/assessments`) and log rotation |
 | `env.example` | server | Template for `.env` (password, intake token, origins) |
 | `deploy.sh` | server | `docker compose pull && up -d`, then waits for the health check |
 
@@ -70,6 +70,7 @@ under GitHub → your profile → Packages → crb-statement-analyzer → Packag
    cd ~/crb-statement-analyzer
    cp env.example .env && chmod 600 .env
    nano .env           # ACCESS_PASSWORD is required; INTAKE_TOKEN only if Apps Script posts here
+   mkdir -p data/assessments && sudo chown 10001 data/assessments   # the JSON archive
    ```
 5. Put HTTPS in front of it. The container listens on `127.0.0.1:8000`, which is
    what [`../linux/nginx.conf.example`](../linux/nginx.conf.example) proxies to:

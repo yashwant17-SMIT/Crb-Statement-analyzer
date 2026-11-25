@@ -6,7 +6,7 @@ const BANDS = ['AA', 'BB', 'CC', 'DD', 'EE', 'FF', 'GG', 'HH', 'II', 'JJ']
 /* ------------------------------------------------------------------ chrome
    Applicant identity lives here and nowhere else. The old build repeated the
    name in a page header and again in a sticky bar 90px below it. */
-export function Chrome({ crb, report, files = {}, onReset, showReset, sheet }) {
+export function Chrome({ crb, report, files = {}, onReset, showReset, sheet, archive }) {
   return (
     <header className="chrome">
       <div className="chrome__mark">
@@ -58,7 +58,7 @@ export function Chrome({ crb, report, files = {}, onReset, showReset, sheet }) {
       </div>
 
       <div className="chrome__actions">
-        {(crb || report) && <ReportActions report={report} crb={crb} sheet={sheet} />}
+        {(crb || report) && <ReportActions report={report} crb={crb} sheet={sheet} archive={archive} />}
         {showReset && (
           <button className="btn btn--ghost btn--small" onClick={onReset}>New application</button>
         )}
@@ -1414,7 +1414,7 @@ export function Evidence({ evidence }) {
  * declined at the band gate, which never gets a statement - could not be
  * printed or exported at all.
  */
-export function ReportActions({ report, crb, sheet }) {
+export function ReportActions({ report, crb, sheet, archive }) {
   const payload = report ? { credit_bureau: crb, statement: report } : { credit_bureau: crb }
   const kind = report ? 'underwriting-report' : 'bureau-check'
   function downloadJson() {
@@ -1431,7 +1431,29 @@ export function ReportActions({ report, crb, sheet }) {
       <button className="btn btn--ghost btn--small" onClick={() => window.print()}>Print</button>
       <button className="btn btn--ghost btn--small" onClick={downloadJson}>Export JSON</button>
       {sheet && <SheetsAction sheet={sheet} />}
+      {archive && <ArchiveAction archive={archive} />}
     </div>
+  )
+}
+
+/**
+ * JSON archive status. Saving is automatic, so there is no button until a
+ * save fails; then it offers a retry, which writes a new file.
+ */
+function ArchiveAction({ archive }) {
+  if (archive.state === 'saved') {
+    return <span className="sheets-status" title={archive.path}>Saved as JSON</span>
+  }
+  if (archive.state === 'saving') return <span className="sheets-status">Saving JSON…</span>
+  if (archive.state !== 'error') return null
+  return (
+    <>
+      <button className="btn btn--ghost btn--small" onClick={archive.onSave}
+              title="Write this assessment to the customer's JSON archive folder">
+        Retry JSON save
+      </button>
+      <span className="sheets-status" data-tone="bad" title={archive.message}>JSON not saved: {archive.message}</span>
+    </>
   )
 }
 

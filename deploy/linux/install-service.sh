@@ -90,6 +90,12 @@ ALLOWED_ORIGINS=http://localhost:$PORT
 # Intake sheet via Apps Script: the script bound to the intake sheet posts
 # each row here with this token. Off while unset. See apps-script/README.md.
 #INTAKE_TOKEN=output-of-openssl-rand-hex-32
+
+# JSON archive: every finished assessment as <name>_<national id>/<date>_<time>.json,
+# e.g. mugisha-eric_1199080000000001/2026-11-25_16-47-03.json.
+# /var/lib/$NAME is the unit's StateDirectory, the one place the service may
+# write. Comment out to turn the archive off.
+ASSESSMENTS_DIR=/var/lib/$NAME/assessments
 EOF
     echo "Wrote $ENV_FILE"
 else
@@ -117,7 +123,10 @@ EnvironmentFile=$ENV_FILE
 ExecStart=$VENV_PY -m uvicorn app.main:app --host $BIND --port $PORT --workers $WORKERS --proxy-headers
 Restart=on-failure
 RestartSec=5
-# Uploads are parsed in memory; the service writes nothing to disk.
+# Uploads are parsed in memory. The only writable path is the StateDirectory,
+# /var/lib/$NAME (0700, owned by $SVC_USER), which holds the JSON archive.
+StateDirectory=$NAME
+StateDirectoryMode=0700
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

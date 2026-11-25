@@ -202,5 +202,6 @@ Remove-Item -Recurse backend\.venv, frontend\node_modules, frontend\dist
 ```
 
 Nothing is written outside the repo folder, and no statement data is persisted
-anywhere — the service holds each upload in memory for the length of one
-request and discards it.
+anywhere unless the JSON archive (`ASSESSMENTS_DIR`) is turned on — the
+service holds each upload in memory for the length of one request and
+discards it.

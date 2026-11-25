@@ -18,6 +18,8 @@ services:
     # GOOGLE_SERVICE_ACCOUNT_FILE=/run/secrets/<file> in .env.
     volumes:
       - ./secrets:/run/secrets:ro
+      # JSON archive, if used: mkdir -p data/assessments && sudo chown 10001 data/assessments
+      - ./data/assessments:/data/assessments
     logging:
       driver: json-file
       options:

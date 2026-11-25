@@ -143,6 +143,27 @@ The script runs as the sheet owner, so the server needs no Google
 credentials for this. It does need a fixed public HTTPS address. Setup is in
 [apps-script/README.md](../../apps-script/README.md).
 
+### 8. JSON archive
+
+New installs save every finished assessment as JSON in
+`/var/lib/momo-underwriter/assessments/<name>_<national id>/<date>_<time>.json`. The
+unit's `StateDirectory` is the only place the hardened service may write.
+
+A service installed before this existed needs the directory and the setting
+added once:
+
+```bash
+sudo mkdir -p /etc/systemd/system/momo-underwriter.service.d
+printf '[Service]\nStateDirectory=momo-underwriter\nStateDirectoryMode=0700\n' \
+  | sudo tee /etc/systemd/system/momo-underwriter.service.d/archive.conf
+sudo systemctl daemon-reload
+echo 'ASSESSMENTS_DIR=/var/lib/momo-underwriter/assessments' | sudo tee -a /etc/momo-underwriter/env
+sudo systemctl restart momo-underwriter
+curl -s localhost:8000/api/v1/archive/status    # {"configured":true}
+```
+
+Read the files with `sudo ls /var/lib/momo-underwriter/assessments`.
+
 ### Updating
 
 ```bash
@@ -195,6 +216,7 @@ nano .env
 | `ALLOWED_ORIGINS` | `https://underwriting.example.com` |
 | `INTAKE_TOKEN` | `openssl rand -hex 32`, only if the Apps Script intake is used |
 | `GOOGLE_SHEETS_ID`, `GOOGLE_SERVICE_ACCOUNT_FILE` | Only for Save to Sheets; see below |
+| `ASSESSMENTS_DIR` | Already `/data/assessments`: every assessment is also saved as JSON. Blank turns it off |
 | `HOST_PORT` | Only if 8000 is taken; then change `proxy_pass` in nginx to match |
 
 For Save to Sheets, copy the service-account key in and let the container's
@@ -206,6 +228,19 @@ cp /path/to/service_account.json secrets/service-account.json
 sudo chown 10001 secrets/service-account.json && chmod 600 secrets/service-account.json
 # .env: GOOGLE_SERVICE_ACCOUNT_FILE=/run/secrets/service-account.json
 ```
+
+The JSON archive lives in `./data/assessments`, one folder per customer and
+one file per assessment. Create it and let the container's user write to it,
+or every save fails with "Permission denied":
+
+```bash
+mkdir -p data/assessments
+sudo chown 10001 data/assessments && sudo chmod 700 data/assessments
+```
+
+Read the files with `sudo`, e.g. `sudo ls data/assessments`. They hold full
+customer assessments: include the folder in encrypted backups, and decide how
+long to keep them.
 
 ### 4. Build and start
 
@@ -313,7 +348,8 @@ docker compose logs -f                            # logs
 docker compose up -d                              # after editing .env
 ```
 
-The container's filesystem is read-only; the API never writes to disk.
+The container's filesystem is read-only; the only folder it writes to is the
+JSON archive in `./data/assessments`.
 
 ---
 

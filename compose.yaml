@@ -26,6 +26,10 @@ services:
     # never baked into the image; secrets/ is ignored by git and Docker.
     volumes:
       - ./secrets:/run/secrets:ro
+      # The JSON archive (ASSESSMENTS_DIR in .env), one folder per customer.
+      # The only writable path; the app runs as uid 10001, so on first setup:
+      #   mkdir -p data/assessments && sudo chown 10001 data/assessments
+      - ./data/assessments:/data/assessments
     logging:
       driver: json-file
       options:

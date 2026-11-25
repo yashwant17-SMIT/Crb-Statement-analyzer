@@ -6,12 +6,13 @@ MoMo Statement Underwriting API.
     POST /api/v1/transactions   multipart PDF  -> normalised transaction rows only
     GET  /api/v1/policy                        -> current default credit policy
     POST /api/v1/sheets/save    JSON           -> write an assessment to Google Sheets
+    POST /api/v1/archive/save   JSON           -> write an assessment to the JSON archive
     POST /api/v1/intake/assess  multipart      -> one intake-sheet row, posted by Apps Script
     GET  /api/v1/health
 
-Stateless: nothing is written to disk, nothing is retained after the response.
-The optional Google Sheets export (app/sheets.py) is the one place results
-leave the process, and only when it is configured.
+Stateless apart from two optional exports, each off until configured: the
+Google Sheets export (app/sheets.py) and the JSON archive on disk
+(app/archive.py). Uploaded PDFs are never written anywhere.
 """
 from __future__ import annotations
 
@@ -31,7 +32,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import UploadFile as FormFile
 
-from . import intake, intake_fields, sheets
+from . import archive, intake, intake_fields, sheets
 from .analyzer import analyze
 from .combine import account_label, combine_reports, group_by_account
 from .config import CRB_PASSWORD_NID_LENGTH, DEFAULT_POLICY, SKIP_FRESHNESS_SNOS, Policy
@@ -678,6 +679,42 @@ def sheets_save(payload: dict = Body(...)):
         raise HTTPException(status_code=502, detail={"error": "sheets_failed", "message": str(exc)})
 
 
+@app.get("/api/v1/archive/status")
+async def archive_status():
+    """Lets the console decide whether to save each assessment as JSON."""
+    return {"configured": archive.configured()}
+
+
+@app.post("/api/v1/archive/save")
+def archive_save(payload: dict = Body(...)):
+    """Write one assessment to its customer's folder as a new JSON file.
+
+    The body is the Sheets save's (`credit_bureau`, `statement`, `files`) plus
+    optional `inputs` (customer type, requested amount) and `assessment_id`:
+    the Sheets row's ID, so the file and the row can be matched. Sync for the
+    same reason as the Sheets save: the disk write runs in a worker thread.
+    """
+    if not archive.configured():
+        raise HTTPException(status_code=503, detail={
+            "error": "archive_not_configured",
+            "message": "The JSON archive is not configured on this server.",
+            "hint": "Set ASSESSMENTS_DIR in the service settings.",
+        })
+    crb, report = payload.get("credit_bureau"), payload.get("statement")
+    inputs, aid = payload.get("inputs"), payload.get("assessment_id")
+    if (not isinstance(crb, (dict, type(None))) or not isinstance(report, (dict, type(None)))
+            or not isinstance(inputs, (dict, type(None))) or not isinstance(aid, (str, type(None)))):
+        raise HTTPException(status_code=400, detail={
+            "error": "invalid_payload",
+            "message": "credit_bureau, statement and inputs must be objects or null; assessment_id a string."})
+    try:
+        return archive.save(crb, report, payload.get("files") or {}, source="console",
+                            assessment_id=aid, inputs=inputs)
+    except archive.ArchiveError as exc:
+        log.warning("JSON archive failed: %s", exc)
+        raise HTTPException(status_code=502, detail={"error": "archive_failed", "message": str(exc)})
+
+
 @app.post("/api/v1/intake/assess")
 async def intake_assess(request: Request):
     """One intake-sheet row, posted by the Apps Script bound to that sheet.
@@ -748,6 +785,18 @@ async def intake_assess(request: Request):
     body = intake.for_sheet(out, files, tabs, register)
     if waived:
         body["result"] += " (freshness check waived)"
+    if archive.configured():
+        # The sheet write is the row's outcome; a failed archive is logged and
+        # reported alongside it, never turned into a failed row.
+        inputs = {"customer_type": ctype, "requested_amount": amount, "provider": prov,
+                  "sno": text("sno"), "freshness_waived": waived}
+        try:
+            body["archive"] = archive.save(out["credit_bureau"], out.get("statement"), files,
+                                           source="intake", inputs=inputs,
+                                           assessment_id=body["results"]["assessment_id"])
+        except archive.ArchiveError as exc:
+            log.warning("JSON archive failed for an intake row: %s", exc)
+            body["archive"] = {"error": str(exc)}
     return body
 
 

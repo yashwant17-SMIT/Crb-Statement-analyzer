@@ -116,6 +116,43 @@ export async function saveToSheets(crb, report, files) {
   return payload
 }
 
+/** Whether the server keeps a JSON archive. Any failure reads as "off". */
+export async function fetchArchiveStatus(signal) {
+  try {
+    const res = await fetch(`${BASE}/api/v1/archive/status`, { signal })
+    return res.ok ? await res.json() : { configured: false }
+  } catch {
+    return { configured: false }
+  }
+}
+
+/**
+ * Write the assessment as a new JSON file in the customer's archive folder.
+ * `assessmentId` is the Sheets row's, when there is one, so the two match.
+ * @returns {Promise<{assessment_id:string, path:string}>}
+ */
+export async function saveToArchive(crb, report, files, inputs, assessmentId) {
+  const body = JSON.stringify({
+    credit_bureau: crb ?? null, statement: report ?? null, files, inputs,
+    assessment_id: assessmentId ?? null,
+  })
+  let res
+  try {
+    res = await fetch(`${BASE}/api/v1/archive/save`, {
+      method: 'POST', body, headers: { 'Content-Type': 'application/json' },
+    })
+  } catch {
+    throw new ApiError('The analysis service did not respond.', { code: 'network_unreachable' })
+  }
+  const payload = await res.json().catch(() => null)
+  if (!res.ok) {
+    const detail = payload?.detail ?? {}
+    throw new ApiError(detail.message || 'Could not save the JSON file.',
+      { code: detail.error, hint: detail.hint, status: res.status })
+  }
+  return payload
+}
+
 async function post(path, form, signal) {
   let res
   try {

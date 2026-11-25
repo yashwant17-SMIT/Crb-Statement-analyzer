@@ -164,5 +164,6 @@ Expected: `status: ok`.
 | "Does not look like a credit bureau report" | Statement dropped in the bureau slot | They are different documents. Bureau report first, statement second |
 | Upload seems to hang | It hasn't | A 62-page statement takes ~20 seconds. Windows Defender can add more on first run |
 
-Nothing is written outside this folder, and no statement data is saved anywhere.
+Nothing is written outside this folder, and no statement data is saved anywhere
+unless the JSON archive (`ASSESSMENTS_DIR`) is turned on.
 Each upload lives in memory for one request and is discarded.
