@@ -14,8 +14,9 @@ services:
     env_file: .env
     # Localhost by default, so nginx is the one way in: Docker's port rules
     # bypass ufw. BIND_ADDRESS=0.0.0.0 in .env shares it on the LAN directly.
+    # HOST_PORT moves it off 8000 when something else already holds that port.
     ports:
-      - "${BIND_ADDRESS:-127.0.0.1}:8000:8000"
+      - "${BIND_ADDRESS:-127.0.0.1}:${HOST_PORT:-8000}:8000"
     restart: unless-stopped
     read_only: true
     tmpfs:
