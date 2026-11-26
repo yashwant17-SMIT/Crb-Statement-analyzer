@@ -1,0 +1,25 @@
+# Publishes Ledger over HTTPS on an ngrok static domain, for a server with no
+# nginx in front: the intake sheet's Apps Script only calls https:// addresses.
+# ngrok connects out, so no port is opened for it. Turn it on in .env:
+#
+#   COMPOSE_FILE=compose.yaml:compose.ngrok.yaml
+#   NGROK_AUTHTOKEN=<dashboard.ngrok.com -> Your Authtoken>
+#   NGROK_DOMAIN=<name>.ngrok-free.dev
+#
+# A free static domain can be online in one place only: stop any other ngrok
+# using it (a laptop, say) first.
+services:
+  ngrok:
+    image: ngrok/ngrok:3
+    container_name: crb-statement-analyzer-ngrok
+    command: ["http", "underwriter:8000", "--url", "https://${NGROK_DOMAIN:?set NGROK_DOMAIN in .env}"]
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:?set NGROK_AUTHTOKEN in .env}
+    depends_on:
+      - underwriter
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
